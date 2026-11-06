@@ -32,9 +32,13 @@ jobs:
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-smoke/Cargo.toml -- -D warnings
       - name: Build smoke prototype
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-smoke/Cargo.toml
+      - name: Test smoke prototype
+        run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-smoke/Cargo.toml
       - name: Format profiles prototype
         run: cargo +1.99.1 fmt --manifest-path prototypes/wry-profiles/Cargo.toml --check
       - name: Clippy profiles prototype
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-profiles/Cargo.toml -- -D warnings
       - name: Build profiles prototype
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-profiles/Cargo.toml
+      - name: Test profiles prototype
+        run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-profiles/Cargo.toml
