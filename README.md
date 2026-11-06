@@ -15,6 +15,8 @@
 
 Узкие опыты на macOS: [открытие окна и сайта в Wry](prototypes/wry-smoke/README.md) и [изоляция тестовых данных профилей](prototypes/wry-profiles/README.md). Результаты записаны в [протоколе запуска](docs/experiments/2026-11-06-wry-macos-smoke.md) и [протоколе профилей](docs/experiments/2026-11-06-wry-macos-profiles.md).
 
+Для Servo выполнен [первый запуск официального servoshell на macOS](docs/experiments/2026-11-06-servo-macos-release-smoke.md). Он проверяет базовую навигацию и локальную тестовую страницу; встраивание Servo в Search ещё не проверялось.
+
 См. [техническое задание](docs/product-spec.md), [план прототипов](docs/prototype-plan.md), [платформенную матрицу](docs/platform-matrix.md), [выбор лицензии](docs/license-decision.md), [исследование](docs/research.md), [план](docs/roadmap.md), [работу агентов](docs/agent-workflow.md), [правила для участников](CONTRIBUTING.md), [безопасность](SECURITY.md), [правила для агентов](AGENTS.md) и [дизайн-бриф](docs/design-brief.md).
 
 ## Статус

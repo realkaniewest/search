@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Search fixture: ready</title>
+  <style>
+    body { font: 18px system-ui, sans-serif; margin: 3rem; line-height: 1.5; }
+    button { font: inherit; padding: .5rem 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Тестовая страница Search</h1>
+  <p>Русский текст и простое действие для сравнения движков.</p>
+  <button id="check" type="button">Проверить действие</button>
+  <p id="result" aria-live="polite">Ожидает нажатия</p>
+  <script>
+    document.getElementById('check').addEventListener('click', () => {
+      document.title = 'Search fixture: clicked';
+      document.getElementById('result').textContent = 'Действие выполнено';
+    });
+  </script>
+</body>
+</html>
