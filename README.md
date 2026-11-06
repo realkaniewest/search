@@ -13,6 +13,8 @@
 - Окончательный выбор после прототипов на всех трёх ОС и проверки реальных сайтов.
 - Дизайн разрабатывается отдельно до реализации основного интерфейса.
 
+Первый узкий опыт: [Wry smoke на macOS](prototypes/wry-smoke/README.md). Его [протокол](docs/experiments/2026-11-06-wry-macos-smoke.md) отделяет подтверждённые результаты от ещё не проверенных сценариев.
+
 См. [техническое задание](docs/product-spec.md), [план прототипов](docs/prototype-plan.md), [платформенную матрицу](docs/platform-matrix.md), [выбор лицензии](docs/license-decision.md), [исследование](docs/research.md), [план](docs/roadmap.md), [работу агентов](docs/agent-workflow.md), [правила для участников](CONTRIBUTING.md), [безопасность](SECURITY.md), [правила для агентов](AGENTS.md) и [дизайн-бриф](docs/design-brief.md).
 
 ## Статус
