@@ -18,12 +18,16 @@ use tao::{
     event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
     window::{Window, WindowBuilder, WindowId},
 };
-use wry::{WebView, WebViewBuilder, WebViewBuilderExtDarwin};
+use wry::{PermissionKind, PermissionResponse, WebView, WebViewBuilder, WebViewBuilderExtDarwin};
 
 const ADDRESS: &str = "127.0.0.1:43127";
 const PROFILE_A: [u8; 16] = *b"SearchProfileA01";
 const PROFILE_B: [u8; 16] = *b"SearchProfileB02";
 const PAGE: &str = include_str!("profile.html");
+
+fn deny_permission(_: PermissionKind) -> PermissionResponse {
+    PermissionResponse::Deny
+}
 
 fn serve(mut stream: TcpStream) -> std::io::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
@@ -69,8 +73,27 @@ fn create_window(
         Some(identifier) => builder.with_data_store_identifier(identifier),
         None => builder.with_incognito(true),
     };
-    let webview = builder.build(&window)?;
+    let webview = builder
+        .with_permission_handler(deny_permission)
+        .build(&window)?;
     Ok((webview, window))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denies_media_permissions() {
+        assert_eq!(
+            deny_permission(PermissionKind::Camera),
+            PermissionResponse::Deny
+        );
+        assert_eq!(
+            deny_permission(PermissionKind::Microphone),
+            PermissionResponse::Deny
+        );
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

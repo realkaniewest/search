@@ -10,7 +10,11 @@ use tao::{
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
-use wry::WebViewBuilder;
+use wry::{PermissionKind, PermissionResponse, WebViewBuilder};
+
+fn deny_permission(_: PermissionKind) -> PermissionResponse {
+    PermissionResponse::Deny
+}
 
 fn main() -> wry::Result<()> {
     let event_loop = EventLoop::new();
@@ -22,6 +26,7 @@ fn main() -> wry::Result<()> {
     let _webview = WebViewBuilder::new()
         .with_html(include_str!("smoke.html"))
         .with_incognito(true)
+        .with_permission_handler(deny_permission)
         .build(&window)?;
 
     event_loop.run(move |event, _, control_flow| {
@@ -35,4 +40,21 @@ fn main() -> wry::Result<()> {
             *control_flow = ControlFlow::Exit;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denies_media_permissions() {
+        assert_eq!(
+            deny_permission(PermissionKind::Camera),
+            PermissionResponse::Deny
+        );
+        assert_eq!(
+            deny_permission(PermissionKind::Microphone),
+            PermissionResponse::Deny
+        );
+    }
 }
