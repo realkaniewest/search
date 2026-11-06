@@ -50,3 +50,9 @@ jobs:
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-permission-deny/Cargo.toml
       - name: Test permission diagnostic logic
         run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-permission-deny/Cargo.toml
+      - name: Format download probe
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-download/Cargo.toml --check
+      - name: Clippy download probe
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-download/Cargo.toml -- -D warnings
+      - name: Build download probe
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-download/Cargo.toml
