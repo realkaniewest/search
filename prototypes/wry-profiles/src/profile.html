@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Search: проверка профилей</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; max-width: 38rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; }
+    button, input { font: inherit; padding: .5rem; margin: .3rem 0; }
+    input { width: min(20rem, 90%); }
+    pre { white-space: pre-wrap; background: #eee; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Проверка профилей Wry</h1>
+  <p>Окно и режим видны в заголовке. Все три окна используют один адрес: <code>http://127.0.0.1:43127/</code>.</p>
+  <label>Метка: <input id="marker" value="A-test" autocomplete="off"></label><br>
+  <button id="write" type="button">Записать метку</button>
+  <button id="read" type="button">Прочитать данные</button>
+  <button id="clear" type="button">Очистить данные этого окна</button>
+  <pre id="result" aria-live="polite"></pre>
+  <script>
+    const key = 'search_profile_probe';
+    const result = document.getElementById('result');
+    function show() {
+      try {
+        result.textContent = `Origin: ${location.origin}\nCookie: ${document.cookie || '(пусто)'}\nlocalStorage: ${localStorage.getItem(key) ?? '(пусто)'}`;
+      } catch (error) {
+        result.textContent = `Ошибка чтения: ${error}`;
+      }
+    }
+    document.getElementById('write').addEventListener('click', () => {
+      const marker = document.getElementById('marker').value;
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(marker)) {
+        result.textContent = 'Метка: 1–40 латинских букв, цифр, _ или -';
+        return;
+      }
+      try {
+        document.cookie = `${key}=${marker}; Path=/; SameSite=Lax`;
+        localStorage.setItem(key, marker);
+        show();
+      } catch (error) {
+        result.textContent = `Ошибка записи: ${error}`;
+      }
+    });
+    document.getElementById('read').addEventListener('click', show);
+    document.getElementById('clear').addEventListener('click', () => {
+      try {
+        document.cookie = `${key}=; Path=/; Max-Age=0; SameSite=Lax`;
+        localStorage.removeItem(key);
+        show();
+      } catch (error) {
+        result.textContent = `Ошибка очистки: ${error}`;
+      }
+    });
+    show();
+  </script>
+</body>
+</html>

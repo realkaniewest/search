@@ -26,9 +26,15 @@ jobs:
           persist-credentials: false
       - name: Install Rust tools
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
-      - name: Format
+      - name: Format smoke prototype
         run: cargo +1.99.1 fmt --manifest-path prototypes/wry-smoke/Cargo.toml --check
-      - name: Clippy
+      - name: Clippy smoke prototype
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-smoke/Cargo.toml -- -D warnings
-      - name: Build
+      - name: Build smoke prototype
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-smoke/Cargo.toml
+      - name: Format profiles prototype
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-profiles/Cargo.toml --check
+      - name: Clippy profiles prototype
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-profiles/Cargo.toml -- -D warnings
+      - name: Build profiles prototype
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-profiles/Cargo.toml
