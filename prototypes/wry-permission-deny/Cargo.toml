@@ -1,0 +1,10 @@
+[package]
+name = "search-wry-permission-deny"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+tao = "=0.37.2"
+wry = "=0.57.1"
