@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Search permission: running</title>
+</head>
+<body>
+  <h1>Проверка отказа камеры</h1>
+  <p id="result">Запрос выполняется...</p>
+  <script>
+    async function report(status, detail = '') {
+      document.title = `Search permission: ${status}`;
+      document.getElementById('result').textContent = `${status}: ${detail}`;
+      await fetch(`/report?status=${status}&detail=${encodeURIComponent(detail)}`, { cache: 'no-store' });
+    }
+
+    const context = `secure=${isSecureContext},media=${Boolean(navigator.mediaDevices?.getUserMedia)}`;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      report('unsupported', context);
+    } else {
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(stream => {
+          stream.getTracks().forEach(track => track.stop());
+          return report('granted', context);
+        })
+        .catch(error => report(error.name || 'unknown-error', `${error.message}; ${context}`));
+    }
+  </script>
+</body>
+</html>

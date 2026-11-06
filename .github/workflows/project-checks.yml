@@ -42,3 +42,11 @@ jobs:
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-profiles/Cargo.toml
       - name: Test profiles prototype
         run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-profiles/Cargo.toml
+      - name: Format permission diagnostic
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-permission-deny/Cargo.toml --check
+      - name: Clippy permission diagnostic
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-permission-deny/Cargo.toml -- -D warnings
+      - name: Build permission diagnostic
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-permission-deny/Cargo.toml
+      - name: Test permission diagnostic logic
+        run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-permission-deny/Cargo.toml
