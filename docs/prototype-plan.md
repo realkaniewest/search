@@ -21,11 +21,13 @@
 
 - `with_permission_handler` в общем API получает вид разрешения, но не origin. Проверить, можно ли дать пользователю корректное решение именно для конкретного сайта через платформенные API. [Документация Wry](https://docs.rs/wry/latest/wry/struct.WebViewBuilder.html).
 - Проверить устойчивую изоляцию профилей отдельно на всех ОС. На Windows есть именованные профили WebView2; на macOS поддержка отдельных persistent data stores зависит от версии ОС. [Windows API Wry](https://docs.rs/wry/latest/x86_64-pc-windows-msvc/wry/trait.WebViewBuilderExtWindows.html).
+- На macOS 14+ проверить `with_data_store_identifier` для двух постоянных профилей и `with_incognito(true)` для временного окна: записать cookie и `localStorage` на одном локальном origin, проверить отсутствие данных в других контекстах, сохранение постоянного профиля после перезапуска и удаление временных данных после закрытия. Отдельно проверить удаление постоянного хранилища после закрытия его WebView. [Darwin API Wry](https://docs.rs/wry/0.57.1/wry/trait.WebViewBuilderExtDarwin.html), [WebKit profiles](https://webkit.org/blog/14423/building-profiles-with-new-webkit-api/).
 - Wry передаёт WebView2 аргумент, отключающий `msSmartScreenProtection` по умолчанию. Проверить фактическое поведение, способ сохранить защиту и последствия для совместимости; записать конкретную конфигурацию. [Исходный код Wry](https://github.com/tauri-apps/wry/blob/dev/src/webview2/mod.rs).
 - На macOS callback завершения загрузки не сообщает путь к файлу. Проверить, можно ли построить понятный менеджер загрузок. [Документация Wry](https://docs.rs/wry/latest/wry/struct.WebViewBuilder.html).
 
 ## Особые проверки Servo
 
+- Первый опыт на macOS провести в официальном `servoshell` с закреплённым коммитом Servo и записанными версиями инструментов. Это проверяет совместимость сайтов, но не встраивание движка в Search. [Сборка Servo на macOS](https://book.servo.org/building/macos.html), [состояние встраивания](https://book.servo.org/).
 - Реальная совместимость тестовых сайтов и работа логина, медиа и файлов.
 - Встраивание движка в окно Search, crash isolation, процессная модель и доступность.
 - Стоимость сборки, размер пакета и частота исправлений движка.
