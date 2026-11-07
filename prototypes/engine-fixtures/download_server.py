@@ -8,13 +8,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 PAYLOAD = b"Search Servo download probe\n"
-PAGE = b'''<!doctype html>
+MANUAL_PAGE = b'''<!doctype html>
 <meta charset="utf-8">
 <title>Search download fixture</title>
 <h1>Search download fixture</h1>
 <a id="download" href="/download">Download test file</a>
-<script>setTimeout(() => document.getElementById('download').click(), 1000)</script>
 '''
+PAGE = MANUAL_PAGE + b"<script>setTimeout(() => document.getElementById('download').click(), 1000)</script>\n"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -27,6 +27,10 @@ class Handler(BaseHTTPRequestHandler):
             body = PAGE
             content_type = "text/html; charset=utf-8"
             attachment = False
+        elif self.path == "/manual":
+            body = MANUAL_PAGE
+            content_type = "text/html; charset=utf-8"
+            attachment = False
         elif self.path == "/download":
             body = PAYLOAD
             content_type = "application/octet-stream"
@@ -36,7 +40,7 @@ class Handler(BaseHTTPRequestHandler):
             content_type = "text/plain"
             attachment = False
 
-        self.send_response(200 if self.path in {"/page", "/download"} else 404)
+        self.send_response(200 if self.path in {"/page", "/manual", "/download"} else 404)
         self.send_header("Content-Type", content_type)
         if attachment:
             self.send_header(
