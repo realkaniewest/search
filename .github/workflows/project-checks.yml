@@ -56,3 +56,27 @@ jobs:
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-download/Cargo.toml -- -D warnings
       - name: Build download probe
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-download/Cargo.toml
+
+  wry-platform-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Linux WebKitGTK development files
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev
+      - name: Install Rust tools
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format platform probe
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-platform-build/Cargo.toml --check
+      - name: Clippy platform probe
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-platform-build/Cargo.toml -- -D warnings
+      - name: Build platform probe
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-platform-build/Cargo.toml
