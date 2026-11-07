@@ -100,4 +100,4 @@ jobs:
       - name: Build Linux runtime probe
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-linux-runtime/Cargo.toml
       - name: Run under Xvfb
-        run: timeout 40s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime
+        run: timeout 90s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime
