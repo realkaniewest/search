@@ -80,3 +80,24 @@ jobs:
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-platform-build/Cargo.toml -- -D warnings
       - name: Build platform probe
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-platform-build/Cargo.toml
+
+  wry-linux-runtime:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install WebKitGTK and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+      - name: Install Rust tools
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format Linux runtime probe
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-linux-runtime/Cargo.toml --check
+      - name: Clippy Linux runtime probe
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-linux-runtime/Cargo.toml -- -D warnings
+      - name: Build Linux runtime probe
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-linux-runtime/Cargo.toml
+      - name: Run under Xvfb
+        run: timeout 90s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime
