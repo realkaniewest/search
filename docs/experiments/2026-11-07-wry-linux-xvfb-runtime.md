@@ -10,7 +10,7 @@
 
 ## Наблюдения
 
-- [Первый CI-прогон PR #21](https://github.com/realkaniewest/search/actions/runs/42382318520/job/128432334788) завершился успешно за 2 мин 37 с. В шаге `Run under Xvfb` журнал содержит `TITLE Search Linux smoke ready` и `PASS: local HTML changed the document title via JavaScript`.
+- [Первый CI-прогон PR #21](https://github.com/realkaniewest/search/actions/runs/42382318520/job/128432334788) с внешним таймаутом 40 секунд завершился успешно за 2 мин 37 с. В шаге `Run under Xvfb` журнал содержит `TITLE Search Linux smoke ready` и `PASS: local HTML changed the document title via JavaScript`. Лимит 90 секунд установлен после этого прогона.
 - Журнал также содержит предупреждение об отсутствии `org.a11y.Bus` и предупреждения `libEGL` о DRI3/ускоренном рендеринге. Они не остановили сценарий. Доступность и качество графической отрисовки этими логами не подтверждены.
 - Проверки сборки Wry на Windows и Linux, а также существующий macOS CI в этом же прогоне прошли. Это отдельные проверки, не часть Linux UI-сценария.
 
