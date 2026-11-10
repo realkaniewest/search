@@ -103,3 +103,43 @@ jobs:
         run: timeout 90s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime
       - name: Check rendered pixels and X11 input
         run: timeout 150s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/wry-linux-runtime/run_visual_input.sh "$PWD/prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime"
+
+  wry-windows-runtime:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Rust tools
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format Windows runtime probe
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-windows-runtime/Cargo.toml --check
+      - name: Clippy Windows runtime probe
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-windows-runtime/Cargo.toml -- -D warnings
+      - name: Build Windows runtime probe
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-windows-runtime/Cargo.toml
+      - name: Run WebView2 with bounded wait
+        shell: pwsh
+        run: |
+          $exe = "$PWD\prototypes\wry-windows-runtime\target\debug\search-wry-windows-runtime.exe"
+          $stdout = Join-Path $env:RUNNER_TEMP 'search-wry-windows-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'search-wry-windows-stderr.log'
+          try {
+            $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            if (-not $process.WaitForExit(90000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              if (Test-Path $stderr) { Get-Content $stderr -ErrorAction SilentlyContinue | Write-Output }
+              throw 'WebView2 probe exceeded 90 seconds'
+            }
+            $process.Refresh()
+            $log = Get-Content $stderr -Raw
+            Write-Output $log
+            if ($process.ExitCode -ne 0) {
+              if (Test-Path $stdout) { Get-Content $stdout | Write-Output }
+              throw "WebView2 probe exited with code $($process.ExitCode)"
+            }
+            if ($log -notmatch 'PASS: local HTML changed the document title via JavaScript') { throw 'Expected JavaScript marker missing' }
+          } finally {
+            Remove-Item $stdout, $stderr -ErrorAction SilentlyContinue
+          }
