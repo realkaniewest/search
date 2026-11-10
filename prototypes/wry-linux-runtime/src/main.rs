@@ -67,10 +67,11 @@ fn main() {
         .with_incognito(true)
         .with_permission_handler(|_: PermissionKind| PermissionResponse::Deny)
         .with_document_title_changed_handler(move |title| {
-            eprintln!("TITLE {title}");
             if title == READY_TITLE {
+                eprintln!("TITLE {READY_TITLE}");
                 let _ = ready_proxy.send_event(ProbeEvent::Ready);
             } else if title == INPUT_TITLE {
+                eprintln!("TITLE {INPUT_TITLE}");
                 let _ = ready_proxy.send_event(ProbeEvent::InputReady);
             }
         });

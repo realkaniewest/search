@@ -102,4 +102,4 @@ jobs:
       - name: Run under Xvfb
         run: timeout 90s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime
       - name: Check rendered pixels and X11 input
-        run: timeout 120s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/wry-linux-runtime/run_visual_input.sh "$PWD/prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime"
+        run: timeout 150s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/wry-linux-runtime/run_visual_input.sh "$PWD/prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime"

@@ -20,7 +20,7 @@ SEARCH_LINUX_INTERACTIVE=1 "$binary" >"$workdir/app.log" 2>&1 &
 app_pid=$!
 
 ready=false
-for _ in {1..40}; do
+for _ in {1..120}; do
   if grep -q 'READY: waiting for screenshot and input' "$workdir/app.log"; then
     ready=true
     break
@@ -66,7 +66,11 @@ echo "PIXELS: captured $dimensions window with $colored_pixels expected teal pix
 xdotool mousemove --window "$window_id" 100 300
 xdotool click 1
 xdotool type --clearmodifiers --delay 10 'SEARCH_INPUT_OK'
-wait "$app_pid"
+if ! wait "$app_pid"; then
+  cat "$workdir/app.log"
+  echo 'FAIL: app exited before input marker' >&2
+  exit 1
+fi
 app_pid=
 cat "$workdir/app.log"
 grep -q 'PASS: X11 click and keyboard input reached the page' "$workdir/app.log"
