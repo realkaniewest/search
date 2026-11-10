@@ -104,6 +104,20 @@ jobs:
       - name: Check rendered pixels and X11 input
         run: timeout 150s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/wry-linux-runtime/run_visual_input.sh "$PWD/prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime"
 
+  servo-linux-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Servo runtime and virtual display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth imagemagick libxcursor1 libxrandr2 libxi6 libxkbcommon0 libvulkan1 libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+      - name: Run pinned ServoShell release on a local page
+        run: timeout 180s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/servo-linux-runtime/run.sh
+
   wry-windows-runtime:
     runs-on: windows-2025
     timeout-minutes: 15
