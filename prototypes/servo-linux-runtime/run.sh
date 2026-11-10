@@ -14,6 +14,8 @@ cleanup() {
   rm -rf "$workdir"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 asset=servo-x86_64-linux-gnu.tar.gz
 url="https://github.com/servo/servo/releases/download/v0.8.0/$asset"
@@ -25,7 +27,7 @@ tar -xzf "$workdir/$asset" -C "$workdir"
 python3 -m http.server 43131 --bind 127.0.0.1 --directory "$root/prototypes/servo-linux-runtime" >"$workdir/server.log" 2>&1 &
 server_pid=$!
 for _ in {1..30}; do
-  if curl --fail --silent http://127.0.0.1:43131/probe.html >/dev/null; then break; fi
+  if curl --fail --silent --head http://127.0.0.1:43131/probe.html >/dev/null; then break; fi
   if ! kill -0 "$server_pid" 2>/dev/null; then cat "$workdir/server.log"; exit 1; fi
   sleep 0.2
 done

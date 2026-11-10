@@ -8,4 +8,6 @@ Run on Ubuntu 24.04 with Xvfb, ImageMagick and Servo's documented runtime librar
 timeout 180s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/servo-linux-runtime/run.sh
 ```
 
+The screenshot covers the isolated Xvfb root display, so the color check is evidence of rendered content in this controlled display rather than a precise Servo-window capture. The preflight uses HTTP HEAD; the logged GET must come from ServoShell. The script attempts to stop its direct child processes and remove temporary files on normal exit, TERM and INT. If ServoShell spawns descendants, this cleanup alone does not prove they exited.
+
 This proves only this narrow ServoShell scenario. It does not test embedding Servo in Search, user input, real websites, profiles, media, downloads, speed or physical Linux displays.
