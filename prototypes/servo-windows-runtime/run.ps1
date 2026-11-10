@@ -4,19 +4,26 @@
 $ErrorActionPreference = 'Stop'
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
-$work = Join-Path $env:RUNNER_TEMP ('search-servo-windows-' + [guid]::NewGuid().ToString('N'))
+$work = Join-Path $env:RUNNER_TEMP ('search servo windows-' + [guid]::NewGuid().ToString('N'))
 $archive = Join-Path $work 'servo-x86_64-windows-msvc.zip'
 $png = Join-Path $work 'screen.png'
 $serverLog = Join-Path $work 'server.log'
-$serverErr = Join-Path $work 'server.err'
-$servoLog = Join-Path $work 'servo.log'
-$servoErr = Join-Path $work 'servo.err'
 $profile = Join-Path $work 'profile'
 $url = 'http://127.0.0.1:43132/probe.html'
-$expected = '0fca2f4d7e6107304631f7b9031edf0df2c3d88e0570cd19cde1'
+$expected = '0fca2f4d7e6107304631f7b9031edf0df2c3d88e0570cd19cde2ef90379bee8c'
 $server = $null
 $servo = $null
 New-Item -ItemType Directory -Path $work | Out-Null
+
+function Start-ProbeProcess {
+  param([string]$FilePath, [string]$Directory, [string[]]$Argv)
+  $start = [System.Diagnostics.ProcessStartInfo]::new()
+  $start.FileName = $FilePath
+  $start.WorkingDirectory = $Directory
+  $start.UseShellExecute = $false
+  foreach ($item in $Argv) { [void]$start.ArgumentList.Add($item) }
+  return [System.Diagnostics.Process]::Start($start)
+}
 
 try {
   Invoke-WebRequest -Uri 'https://github.com/servo/servo/releases/download/v0.8.0/servo-x86_64-windows-msvc.zip' -OutFile $archive
@@ -29,10 +36,11 @@ try {
   if (-not $exe) { throw 'servoshell.exe missing from official ZIP' }
 
   $fixture = Join-Path $root 'prototypes/servo-windows-runtime'
-  $server = Start-Process -FilePath 'python' -ArgumentList @('-u', '-m', 'http.server', '43132', '--bind', '127.0.0.1', '--directory', $fixture) -PassThru -RedirectStandardOutput $serverLog -RedirectStandardError $serverErr
+  $serverScript = Join-Path $fixture 'server.py'
+  $server = Start-ProbeProcess -FilePath 'python' -Directory $fixture -Argv @('-u', $serverScript, '--root', $fixture, '--log', $serverLog)
   $ready = $false
   for ($i = 0; $i -lt 40; $i++) {
-    if ($server.HasExited) { throw "Local server exited early: $(Get-Content $serverErr -Raw)" }
+    if ($server.HasExited) { throw "Local server exited early with code $($server.ExitCode)" }
     try {
       $response = Invoke-WebRequest -Method Head -Uri $url -TimeoutSec 2
       if ($response.StatusCode -eq 200) { $ready = $true; break }
@@ -40,15 +48,12 @@ try {
   }
   if (-not $ready) { throw 'Local server did not become ready' }
 
-  $servo = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -ArgumentList @('--headless', '--exit', "--output=$png", "--config-dir=$profile", $url) -PassThru -RedirectStandardOutput $servoLog -RedirectStandardError $servoErr
+  $servo = Start-ProbeProcess -FilePath $exe -Directory (Split-Path $exe) -Argv @('--headless', '--exit', "--output=$png", "--config-dir=$profile", $url)
   if (-not $servo.WaitForExit(90000)) { throw 'ServoShell exceeded 90 seconds' }
   $servo.Refresh()
-  if ($servo.ExitCode -ne 0) {
-    if (Test-Path $servoErr) { Get-Content $servoErr | Write-Output }
-    throw "ServoShell exited with code $($servo.ExitCode)"
-  }
+  if ($servo.ExitCode -ne 0) { throw "ServoShell exited with code $($servo.ExitCode)" }
   if (-not (Test-Path $png)) { throw 'ServoShell exited without PNG output' }
-  if (-not (Select-String -Path $serverErr -Pattern 'GET /probe.html HTTP/1.1" 200' -Quiet)) { throw 'No GET from ServoShell in local server log' }
+  if (-not (Select-String -Path $serverLog -Pattern '^GET /probe\.html 200$' -Quiet)) { throw 'No GET from ServoShell in local server log' }
 
   Add-Type -AssemblyName System.Drawing
   $bitmap = [System.Drawing.Bitmap]::new($png)

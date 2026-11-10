@@ -4,9 +4,9 @@
 
 ## Зафиксированные входные данные
 
-- [Servo v0.8.0](https://github.com/servo/servo/releases/tag/v0.8.0), коммит `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, ZIP `servo-x86_64-windows-msvc.zip`, опубликованный SHA-256 `0fca2f4d7e6107304631f7b9031edf0df2c3d88e0570cd19cde1`. Локально ZIP не запускался: это проверка, которую должен выполнить `windows-2025` runner.
+- [Servo v0.8.0](https://github.com/servo/servo/releases/tag/v0.8.0), коммит `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, ZIP `servo-x86_64-windows-msvc.zip`, опубликованный SHA-256 `0fca2f4d7e6107304631f7b9031edf0df2c3d88e0570cd19cde2ef90379bee8c`. Первый CI-прогон отверг неверно записанный digest до распаковки и запуска; полный digest повторно сверён с официальным GitHub API. Следующий прогон проверит ZIP на `windows-2025` runner.
 - [Локальная страница](../../prototypes/servo-windows-runtime/probe.html) подаётся с `127.0.0.1:43132`. JavaScript меняет серый прямоугольник на цвет `#14b8a6`.
-- [Сценарий](../../prototypes/servo-windows-runtime/run.ps1) проверяет SHA-256 до распаковки и запуска, наличие `servoshell.exe`, отдельный временный профиль, GET от Servo и пиксели цвета после JavaScript. Процесс ограничен 90 секундами, job 15 минутами.
+- [Сценарий](../../prototypes/servo-windows-runtime/run.ps1) проверяет SHA-256 до распаковки и запуска, наличие `servoshell.exe`, отдельный временный профиль, GET от Servo и пиксели цвета после JavaScript. Временный каталог намеренно содержит пробел, а пути передаются процессам отдельными аргументами через `ProcessStartInfo.ArgumentList`. Это проверит, что пробелы не меняют профиль или путь PNG. Процесс ограничен 90 секундами, job 15 минутами; новая ветка ещё не прошла CI.
 
 ## Матрица результата
 
