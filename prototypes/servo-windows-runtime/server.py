@@ -6,6 +6,7 @@
 import argparse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 parser = argparse.ArgumentParser()
@@ -20,7 +21,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def log_request(self, code="-", size="-"):
         with options.log.open("a", encoding="utf-8") as log:
-            log.write(f"{self.command} {self.path} {code}\n")
+            log.write(f"{self.command} {urlsplit(self.path).path} {code}\n")
+
+    def log_message(self, format, *args):
+        # The default stderr message includes the unsanitized request target.
+        pass
 
 
 ThreadingHTTPServer(("127.0.0.1", 43132), Handler).serve_forever()
