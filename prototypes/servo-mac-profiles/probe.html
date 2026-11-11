@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Search Servo profile probe</title>
+<style>
+  body { margin: 0; font: 24px sans-serif; }
+  table { width: 100%; height: 650px; border-spacing: 0; table-layout: fixed; }
+  td { width: 50%; background: #9ca3af; text-align: center; }
+</style>
+<h1>Search Servo profile probe</h1>
+<table aria-label="Storage results"><tr>
+  <td id="cookie">Cookie</td>
+  <td id="storage">Local storage</td>
+</tr></table>
+<script>
+  const cookiePanel = document.getElementById('cookie');
+  const storagePanel = document.getElementById('storage');
+  const pass = '#14b8a6';
+  const fail = '#dc2626';
+
+  if (location.search === '') {
+    cookiePanel.style.backgroundColor = pass;
+    storagePanel.style.backgroundColor = pass;
+  } else if (location.search === '?mode=control-red') {
+    cookiePanel.style.backgroundColor = fail;
+    storagePanel.style.backgroundColor = fail;
+  } else {
+    const params = new URLSearchParams(location.search);
+    const mode = params.get('mode');
+    const value = params.get('value');
+    const expected = params.get('expected');
+    const key = 'search_servo_profile_probe';
+
+    if (mode === 'set' && value) {
+      document.cookie = `${key}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`;
+      localStorage.setItem(key, value);
+    }
+
+    const cookiePart = document.cookie.split('; ').find(part => part.startsWith(`${key}=`));
+    const cookieValue = cookiePart ? decodeURIComponent(cookiePart.slice(key.length + 1)) : null;
+    const storageValue = localStorage.getItem(key);
+    const wanted = mode === 'set' ? value : expected === 'EMPTY' ? null : expected;
+    cookiePanel.style.backgroundColor = cookieValue === wanted ? pass : fail;
+    storagePanel.style.backgroundColor = storageValue === wanted ? pass : fail;
+  }
+</script>
