@@ -17,6 +17,8 @@ jobs:
           persist-credentials: false
       - name: Validate TOML and local Markdown links
         run: python3 tools/check_project.py
+      - name: Check Servo profile verdict logic
+        run: PYTHONDONTWRITEBYTECODE=1 python3 prototypes/servo-mac-profiles/test_verdict.py
 
   wry-macos:
     runs-on: macos-26
