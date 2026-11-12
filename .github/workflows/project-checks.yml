@@ -106,6 +106,41 @@ jobs:
       - name: Check rendered pixels and X11 input
         run: timeout 150s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/wry-linux-runtime/run_visual_input.sh "$PWD/prototypes/wry-linux-runtime/target/debug/search-wry-linux-runtime"
 
+  wry-linux-permission-diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install WebKitGTK and virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+      - name: Install Rust tools
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format permission diagnostic
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-linux-permission-origin/Cargo.toml --check
+      - name: Clippy permission diagnostic
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-linux-permission-origin/Cargo.toml -- -D warnings
+      - name: Build permission diagnostic
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-linux-permission-origin/Cargo.toml
+      - name: Run local camera request with Deny
+        shell: bash
+        run: |
+          set +e
+          timeout 45s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-permission-origin/target/debug/search-wry-linux-permission-origin --request-camera
+          result=$?
+          set -e
+          if [ "$result" -eq 0 ]; then
+            echo 'Diagnostic pages completed. This does not prove origin-aware permission handling.' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$result" -eq 1 ]; then
+            echo 'Diagnostic incomplete; origin-aware permission handling remains unverified.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Diagnostic failed with exit code $result" >> "$GITHUB_STEP_SUMMARY"
+            exit "$result"
+          fi
+
   servo-linux-runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
