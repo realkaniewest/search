@@ -1,0 +1,11 @@
+[package]
+name = "search-wry-linux-permission-origin"
+version = "0.1.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[dependencies]
+glib = "=0.18.5"
+tao = "=0.37.2"
+wry = "=0.57.1"
