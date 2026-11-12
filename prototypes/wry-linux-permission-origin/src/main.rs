@@ -315,16 +315,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             reports.push(report);
         }
         if reports.len() >= 9 || started.elapsed() >= TIMEOUT {
-            let mut top_seen = false;
-            let mut frame_seen = false;
             if let Ok(entries) = records.lock() {
                 for entry in entries.iter() {
                     eprintln!("QUERY name={} origin={}", entry.name, entry.origin);
                 }
-                top_seen = entries
+                let top_seen = entries
                     .iter()
                     .any(|entry| entry.name == "camera" && entry.origin == format!("http://127.0.0.1:{top_port}"));
-                frame_seen = entries
+                let frame_seen = entries
                     .iter()
                     .any(|entry| entry.name == "camera" && entry.origin == format!("http://127.0.0.1:{frame_port}"));
                 eprintln!(
