@@ -125,6 +125,8 @@ jobs:
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-linux-permission-origin/Cargo.toml -- -D warnings
       - name: Build permission diagnostic
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-linux-permission-origin/Cargo.toml
+      - name: Test isolated permission page setup
+        run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-linux-permission-origin/Cargo.toml
       - name: Run local camera request with Deny
         shell: bash
         run: |
@@ -140,6 +142,10 @@ jobs:
             echo "Diagnostic failed with exit code $result" >> "$GITHUB_STEP_SUMMARY"
             exit "$result"
           fi
+      - name: Isolate top-level camera request
+        run: timeout 45s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-permission-origin/target/debug/search-wry-linux-permission-origin --request-camera --scenario top-only
+      - name: Isolate cross-origin iframe camera request
+        run: timeout 45s xvfb-run -a --server-args='-screen 0 1280x800x24' prototypes/wry-linux-permission-origin/target/debug/search-wry-linux-permission-origin --request-camera --scenario cross-only
 
   servo-linux-runtime:
     runs-on: ubuntu-24.04
