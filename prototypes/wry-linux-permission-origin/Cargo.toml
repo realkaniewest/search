@@ -8,4 +8,5 @@ publish = false
 [dependencies]
 glib = "=0.18.5"
 tao = "=0.37.2"
+webkit2gtk = { version = "=2.0.2", features = ["v2_24"] }
 wry = "=0.57.1"
