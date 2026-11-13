@@ -29,11 +29,37 @@ use tao::{
     window::WindowBuilder,
 };
 use webkit2gtk::{SettingsExt, WebViewExt};
-use wry::{PermissionResponse, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
+use wry::{
+    PermissionKind, PermissionResponse, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(25);
 const MAX_NATIVE_EVENTS: usize = 64;
 static EVENT_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, Copy, Debug)]
+enum Scenario {
+    All,
+    TopOnly,
+    CrossOnly,
+}
+
+impl Scenario {
+    fn from_args() -> Result<Self, Box<dyn Error>> {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        match args
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            ["--request-camera"] => Ok(Self::All),
+            ["--request-camera", "--scenario", "top-only"] => Ok(Self::TopOnly),
+            ["--request-camera", "--scenario", "cross-only"] => Ok(Self::CrossOnly),
+            _ => Err("expected --request-camera [--scenario top-only|cross-only]".into()),
+        }
+    }
+}
 
 // The Rust webkit2gtk binding used by Wry 0.57.1 omits this signal and its
 // boxed query type. Keep this small C ABI bridge in the research probe only.
@@ -117,16 +143,30 @@ unsafe extern "C" fn destroy_query_data(data: *mut c_void, _closure: *mut c_void
     }
 }
 
-fn html(context: &str, cross_port: u16, token: &str) -> String {
+fn html(context: &str, cross_port: u16, token: &str, scenario: Scenario) -> String {
     let iframes = if context == "top" {
-        format!(
-            "<iframe id='same' src='/same' allow='camera; microphone'></iframe>\
+        match scenario {
+            Scenario::All => format!(
+                "<iframe id='same' src='/same' allow='camera; microphone'></iframe>\
              <iframe id='cross' src='http://127.0.0.1:{cross_port}/' allow='camera; microphone'></iframe>\
              <iframe id='blocked' src='http://127.0.0.1:{cross_port}/no-allow'></iframe>"
-        )
+            ),
+            Scenario::TopOnly => String::new(),
+            Scenario::CrossOnly => format!(
+                "<iframe id='cross' src='http://127.0.0.1:{cross_port}/' allow='camera; microphone'></iframe>"
+            ),
+        }
     } else {
         String::new()
     };
+    if context == "top" && matches!(scenario, Scenario::CrossOnly) {
+        return format!(
+            "<!doctype html><meta charset='utf-8'><title>Search origin probe</title>\
+             <h1>Search origin probe: top idle</h1>{iframes}<script>\
+             fetch('/report/{token}/top-idle/' + encodeURIComponent('no-media-requests|' + location.origin));\
+             </script>"
+        );
+    }
     format!(
         "<!doctype html><meta charset='utf-8'><title>Search origin probe</title>\
          <h1>Search origin probe: {context}</h1>{iframes}<script>\
@@ -244,9 +284,7 @@ fn start_server(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    if std::env::args().skip(1).collect::<Vec<_>>() != ["--request-camera"] {
-        return Err("run only with explicit --request-camera".into());
-    }
+    let scenario = Scenario::from_args()?;
     let top = TcpListener::bind("127.0.0.1:0")?;
     let frame = TcpListener::bind("127.0.0.1:0")?;
     let top_port = top.local_addr()?.port();
@@ -261,8 +299,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     start_server(
         top,
         ServerPages {
-            root: html("top", frame_port, &token),
-            same: Some(html("same", frame_port, &token)),
+            root: html("top", frame_port, &token, scenario),
+            same: Some(html("same", frame_port, &token, scenario)),
             blocked: None,
         },
         sender.clone(),
@@ -273,9 +311,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     start_server(
         frame,
         ServerPages {
-            root: html("cross", top_port, &token),
+            root: html("cross", top_port, &token, scenario),
             same: None,
-            blocked: Some(html("blocked", top_port, &token)),
+            blocked: Some(html("blocked", top_port, &token, scenario)),
         },
         sender,
         frame_port,
@@ -284,6 +322,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     eprintln!("TOP_ORIGIN http://127.0.0.1:{top_port}");
     eprintln!("FRAME_ORIGIN http://127.0.0.1:{frame_port}");
+    eprintln!("SCENARIO {scenario:?}");
 
     let event_loop = EventLoopBuilder::<()>::with_user_event().build();
     let window = WindowBuilder::new()
@@ -292,12 +331,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let box_widget = window.default_vbox().ok_or("Tao GTK box missing")?;
     let records = Arc::new(Mutex::new(Vec::<Query>::new()));
     let denied_count = Arc::new(AtomicUsize::new(0));
+    let camera_denied_count = Arc::new(AtomicUsize::new(0));
     let counter = denied_count.clone();
+    let camera_counter = camera_denied_count.clone();
     let view = WebViewBuilder::new()
         .with_url("about:blank")
         .with_incognito(true)
         .with_permission_handler(move |kind| {
             let count = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            if kind == PermissionKind::Camera {
+                camera_counter.fetch_add(1, Ordering::SeqCst);
+            }
             let sequence = EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
             if count <= MAX_NATIVE_EVENTS {
                 eprintln!("WRY_PERMISSION_REQUEST seq={sequence} {kind:?} DENY");
@@ -346,7 +390,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("PAGE_REPORT {report}");
             reports.push(report);
         }
-        if reports.len() >= 16 || started.elapsed() >= TIMEOUT {
+        let expected_reports = match scenario {
+            Scenario::All => 16,
+            Scenario::TopOnly => 4,
+            Scenario::CrossOnly => 5,
+        };
+        if reports.len() >= expected_reports || started.elapsed() >= TIMEOUT {
             if let Ok(entries) = records.lock() {
                 for entry in entries.iter() {
                     eprintln!("QUERY seq={} name={} origin={}", entry.sequence, entry.name, entry.origin);
@@ -358,8 +407,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .iter()
                     .any(|entry| entry.name == "camera" && entry.origin == format!("http://127.0.0.1:{frame_port}"));
                 eprintln!(
-                    "DIAGNOSTIC top_origin_seen={top_seen} cross_origin_seen={frame_seen} reports={} denied_callbacks={}",
+                    "DIAGNOSTIC scenario={scenario:?} top_origin_seen={top_seen} cross_origin_seen={frame_seen} reports={} denied_callbacks={} camera_denied_callbacks={}",
                     reports.len(), denied_count.load(Ordering::SeqCst)
+                    ,camera_denied_count.load(Ordering::SeqCst)
                 );
             }
             let unsafe_grant = reports
@@ -367,7 +417,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .any(|value| value.contains("-gum") && value.contains("/resolved%7C"));
             let top_report_origin = format!("http%3A%2F%2F127.0.0.1%3A{top_port}");
             let cross_report_origin = format!("http%3A%2F%2F127.0.0.1%3A{frame_port}");
-            let complete = [
+            let expected = match scenario {
+                Scenario::All => vec![
                 ("top-query1/", &top_report_origin),
                 ("top-query2/", &top_report_origin),
                 ("top-gum1/", &top_report_origin),
@@ -384,16 +435,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ("blocked-query2/", &cross_report_origin),
                 ("blocked-gum1/", &cross_report_origin),
                 ("blocked-gum2/", &cross_report_origin),
-            ]
-            .iter()
-            .all(|(prefix, origin)| {
+                ],
+                Scenario::TopOnly => vec![
+                    ("top-query1/", &top_report_origin),
+                    ("top-query2/", &top_report_origin),
+                    ("top-gum1/", &top_report_origin),
+                    ("top-gum2/", &top_report_origin),
+                ],
+                Scenario::CrossOnly => vec![
+                    ("top-idle/", &top_report_origin),
+                    ("cross-query1/", &cross_report_origin),
+                    ("cross-query2/", &cross_report_origin),
+                    ("cross-gum1/", &cross_report_origin),
+                    ("cross-gum2/", &cross_report_origin),
+                ],
+            };
+            let complete = expected.iter().all(|(prefix, origin)| {
                 reports
                     .iter()
                     .any(|value| value.starts_with(*prefix) && value.ends_with(origin.as_str()))
             });
             *control_flow = ControlFlow::ExitWithCode(if unsafe_grant {
                 2
-            } else if complete && denied_count.load(Ordering::SeqCst) > 0 {
+            } else if complete && camera_denied_count.load(Ordering::SeqCst) > 0 {
                 0
             } else {
                 1
@@ -407,4 +471,23 @@ fn main() -> Result<(), Box<dyn Error>> {
             *control_flow = ControlFlow::ExitWithCode(3);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Scenario, html};
+
+    #[test]
+    fn isolated_cross_only_top_never_requests_media() {
+        let page = html("top", 12345, "test-token", Scenario::CrossOnly);
+        assert!(page.contains("top-idle"));
+        assert!(!page.contains("permissions.query"));
+        assert!(!page.contains("getUserMedia"));
+    }
+
+    #[test]
+    fn isolated_top_only_has_no_iframe() {
+        let page = html("top", 12345, "test-token", Scenario::TopOnly);
+        assert!(!page.contains("<iframe"));
+    }
 }
