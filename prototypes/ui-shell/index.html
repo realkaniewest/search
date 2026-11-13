@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Search — прототип интерфейса</title>
+  <style>
+    :root {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: dark;
+      --ink: #f2f3f4;
+      --muted: #adb8c3;
+      --line: rgba(231, 242, 248, .13);
+      --surface: rgba(42, 54, 65, .77);
+      --surface-strong: rgba(66, 79, 89, .8);
+      --tile: rgba(216, 231, 241, .09);
+      --background: #18242e;
+      --accent: #a8c9d0;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --ink: #26323a;
+      --muted: #586871;
+      --line: rgba(34, 58, 71, .16);
+      --surface: rgba(246, 250, 252, .79);
+      --surface-strong: rgba(232, 240, 243, .9);
+      --tile: rgba(255, 255, 255, .56);
+      --background: #d6e0e4;
+      --accent: #315f69;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      color: var(--ink);
+      background: linear-gradient(145deg, #0f1b24 0%, var(--background) 68%, #24333a 100%);
+      padding: clamp(0px, 2.6vw, 36px);
+    }
+    :root[data-theme="light"] body {
+      background: linear-gradient(145deg, #c1d0d6 0%, var(--background) 70%, #e1e8e9 100%);
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+    .window {
+      min-height: min(900px, calc(100vh - 2 * clamp(0px, 2.6vw, 36px)));
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: clamp(0px, 1.6vw, 24px);
+      background: rgba(20, 31, 41, .78);
+      box-shadow: 0 22px 70px rgba(0, 0, 0, .23);
+    }
+    :root[data-theme="light"] .window { background: rgba(233, 241, 244, .82); }
+    .toolbar {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 65px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(25px) saturate(115%);
+      -webkit-backdrop-filter: blur(25px) saturate(115%);
+    }
+    .traffic { display: flex; gap: 8px; padding: 0 9px 0 4px; flex: none; }
+    .traffic span { width: 12px; height: 12px; border-radius: 50%; background: #8d979f; }
+    .traffic span:first-child { background: #ec6d68; }
+    .traffic span:nth-child(2) { background: #e5bd57; }
+    .traffic span:last-child { background: #62b876; }
+    .nav { display: flex; gap: 2px; flex: none; }
+    .tool {
+      height: 37px;
+      min-width: 37px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      color: var(--ink);
+      background: transparent;
+      font-size: 20px;
+      line-height: 1;
+    }
+    .tool:hover { background: var(--tile); border-color: var(--line); }
+    .tool:disabled { opacity: .32; cursor: default; }
+    .tool:disabled:hover { border-color: transparent; background: transparent; }
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 110px;
+      flex: 1 1 auto;
+      overflow-x: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line) transparent;
+      padding: 3px 0;
+    }
+    .tab-slot {
+      flex: 0 0 clamp(98px, 12vw, 190px);
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      height: 39px;
+      padding: 0 5px 0 0;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .tab-slot[data-selected="true"] {
+      background: var(--surface-strong);
+      border-color: var(--line);
+      color: var(--ink);
+      box-shadow: inset 0 1px rgba(255, 255, 255, .11);
+    }
+    .tab-slot:hover { background: var(--tile); }
+    .tab-slot[data-selected="true"]:hover { background: var(--surface-strong); }
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      padding: 0 2px 0 13px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+    }
+    .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: left; font-size: 13px; }
+    .tab-icon { flex: none; width: 16px; text-align: center; font-size: 15px; }
+    .tab-close {
+      flex: none;
+      width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: inherit;
+      font-size: 17px;
+      line-height: 1;
+    }
+    .tab-close:hover { background: var(--tile); }
+    .address {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 150px;
+      flex: 0 1 360px;
+      height: 40px;
+      padding: 0 13px;
+      border: 1px solid rgba(227, 244, 250, .28);
+      border-radius: 18px;
+      background: rgba(190, 209, 220, .08);
+      box-shadow: inset 0 1px rgba(255, 255, 255, .11);
+    }
+    .address:focus-within { border-color: var(--accent); }
+    .address svg { flex: none; width: 16px; height: 16px; opacity: .75; }
+    .address input { width: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-size: 13px; }
+    .address input::placeholder { color: var(--muted); }
+    .actions { display: flex; align-items: center; gap: 2px; flex: none; }
+    main { min-height: 720px; }
+    .home { max-width: 980px; margin: 0 auto; padding: clamp(72px, 12vh, 130px) 28px 80px; }
+    .brand { text-align: center; margin-bottom: clamp(70px, 10vh, 100px); }
+    .brand h1 { margin: 0; font-size: clamp(32px, 4vw, 43px); font-weight: 570; letter-spacing: -.055em; }
+    .brand p { margin: 11px 0 0; color: var(--muted); font-size: 14px; }
+    .section-title { margin: 0 0 24px; font-size: 19px; font-weight: 610; letter-spacing: -.025em; }
+    .favorites { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 18px; }
+    .favorite { min-width: 0; padding: 0; border: 0; background: transparent; color: var(--ink); text-align: center; }
+    .favorite-icon {
+      width: min(100%, 78px);
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 10px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--tile);
+      font-size: 28px;
+      font-weight: 350;
+      transition: transform .15s ease, background .15s ease;
+    }
+    .favorite:hover .favorite-icon, .favorite:focus-visible .favorite-icon { transform: translateY(-3px); background: var(--surface-strong); }
+    .favorite-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+    .recent { margin-top: clamp(82px, 12vh, 128px); }
+    .recent-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .recent-link { min-width: 0; padding: 11px 12px; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 12px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+    .recent-link:hover { color: var(--ink); background: var(--tile); border-color: var(--line); }
+    .mock-page { max-width: 840px; margin: 0 auto; padding: clamp(60px, 10vh, 110px) 28px; }
+    .mock-eyebrow { color: var(--accent); font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .12em; }
+    .mock-page h1 { font-size: clamp(30px, 5vw, 54px); letter-spacing: -.05em; font-weight: 590; margin: 16px 0; }
+    .mock-page p { max-width: 590px; color: var(--muted); line-height: 1.65; }
+    .mock-panel { margin-top: 45px; padding: 24px; border: 1px solid var(--line); border-radius: 19px; background: var(--tile); }
+    .mock-panel strong { font-weight: 600; }
+    .mock-panel p { margin-bottom: 0; }
+    .demo-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    @media (max-width: 850px) {
+      .toolbar { gap: 5px; padding: 8px; }
+      .traffic { gap: 5px; padding: 0 3px; }
+      .traffic span { width: 9px; height: 9px; }
+      .nav .tool { min-width: 30px; width: 30px; }
+      .address { flex-basis: 220px; min-width: 115px; }
+      .favorites { grid-template-columns: repeat(4, minmax(0, 1fr)); row-gap: 24px; }
+    }
+    @media (max-width: 550px) {
+      .toolbar { flex-wrap: wrap; }
+      .tabs { order: 2; flex-basis: 100%; }
+      .address { flex: 1 1 120px; }
+      .home { padding-top: 80px; }
+      .recent-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .favorite-icon { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <header class="toolbar" aria-label="Панель прототипа Search">
+      <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="nav">
+        <button class="tool" id="back" type="button" aria-label="Назад" title="Назад">‹</button>
+        <button class="tool" id="forward" type="button" aria-label="Вперёд" title="Вперёд">›</button>
+      </div>
+      <div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div>
+      <label class="address">
+        <span class="demo-label">Адрес или название демостраницы</span>
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.8"/><path d="m13 13 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <input id="address" autocomplete="off" spellcheck="false" placeholder="Название демостраницы">
+      </label>
+      <div class="actions">
+        <button class="tool" id="new-tab" type="button" aria-label="Новая вкладка" title="Новая вкладка">+</button>
+        <button class="tool" id="theme" type="button" aria-label="Светлая тема" aria-pressed="false" title="Светлая тема">◐</button>
+      </div>
+    </header>
+    <main id="content" role="tabpanel" tabindex="0" aria-live="polite"></main>
+  </div>
+  <script>
+    (() => {
+      "use strict";
+      const pages = {
+        home: { title: "Новая вкладка", icon: "⌂", address: "search://new-tab" },
+        video: { title: "Видео", icon: "▷", address: "demo://video", description: "Место для видео и трансляций. Здесь показана только демонстрационная страница Search." },
+        code: { title: "Код", icon: "⌘", address: "demo://code", description: "Рабочая страница для проекта. Позже здесь будет открываться настоящий сайт через выбранный движок." },
+        notes: { title: "Заметки", icon: "▤", address: "demo://notes", description: "Пример вкладки с заметками. Прототип не хранит данные и не открывает файлы." },
+        design: { title: "Дизайн", icon: "◇", address: "demo://design", description: "Пример страницы с материалами проекта." },
+        reading: { title: "Чтение", icon: "▣", address: "demo://reading", description: "Пример спокойной страницы для чтения." },
+        forum: { title: "Форум", icon: "○", address: "demo://forum", description: "Пример страницы обсуждения." },
+        news: { title: "Новости", icon: "▦", address: "demo://news", description: "Пример ленты новостей." },
+        places: { title: "Места", icon: "⌖", address: "demo://places", description: "Пример страницы карты." }
+      };
+      const favorites = ["video", "code", "notes", "design", "reading", "forum", "news", "places"];
+      const recent = ["code", "notes", "video", "reading"];
+      let nextId = 1;
+      const tabs = [{ id: nextId++, page: "home", history: ["home"], position: 0 }];
+      let activeId = tabs[0].id;
+      const tablist = document.getElementById("tabs");
+      const content = document.getElementById("content");
+      const address = document.getElementById("address");
+      const back = document.getElementById("back");
+      const forward = document.getElementById("forward");
+      const current = () => tabs.find(tab => tab.id === activeId);
+      function node(tag, className, label) {
+        const element = document.createElement(tag);
+        if (className) element.className = className;
+        if (label !== undefined) element.textContent = label;
+        return element;
+      }
+      function button(label, className, onClick) {
+        const element = node("button", className, label);
+        element.type = "button";
+        element.addEventListener("click", onClick);
+        return element;
+      }
+      function open(page, newTab = false) {
+        if (!Object.hasOwn(pages, page)) page = "home";
+        if (newTab) {
+          const tab = { id: nextId++, page, history: [page], position: 0 };
+          tabs.push(tab);
+          activeId = tab.id;
+        } else {
+          const tab = current();
+          tab.history = tab.history.slice(0, tab.position + 1);
+          tab.history.push(page);
+          tab.position++;
+          tab.page = page;
+        }
+        render();
+      }
+      function close(id) {
+        const index = tabs.findIndex(tab => tab.id === id);
+        if (index < 0) return;
+        tabs.splice(index, 1);
+        if (tabs.length === 0) {
+          const tab = { id: nextId++, page: "home", history: ["home"], position: 0 };
+          tabs.push(tab);
+          activeId = tab.id;
+        } else if (activeId === id) {
+          activeId = tabs[Math.min(index, tabs.length - 1)].id;
+        }
+        render();
+        focusActiveTab();
+      }
+      function focusActiveTab() {
+        tablist.querySelector('[aria-selected="true"]')?.focus();
+      }
+      function renderTabs() {
+        tablist.replaceChildren();
+        for (const tab of tabs) {
+          const slot = node("div", "tab-slot");
+          slot.setAttribute("role", "presentation");
+          slot.dataset.selected = String(tab.id === activeId);
+          const item = button("", "tab", () => { activeId = tab.id; render(); focusActiveTab(); });
+          item.id = `tab-${tab.id}`;
+          item.setAttribute("role", "tab");
+          item.setAttribute("aria-selected", String(tab.id === activeId));
+          item.setAttribute("aria-controls", "content");
+          item.setAttribute("aria-label", pages[tab.page].title);
+          item.tabIndex = tab.id === activeId ? 0 : -1;
+          item.append(node("span", "tab-icon", pages[tab.page].icon), node("span", "tab-title", pages[tab.page].title));
+          const x = button("×", "tab-close", () => close(tab.id));
+          x.setAttribute("aria-label", `Закрыть вкладку ${pages[tab.page].title}`);
+          slot.append(item, x);
+          tablist.append(slot);
+        }
+        const selected = tablist.querySelector('[aria-selected="true"]');
+        selected?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        content.setAttribute("aria-labelledby", selected.id);
+      }
+      function renderHome() {
+        const home = node("div", "home");
+        const brand = node("div", "brand");
+        brand.append(node("h1", "", "Search"), node("p", "", "Место для всего, что вы ищете"));
+        home.append(brand, node("h2", "section-title", "Избранное"));
+        const grid = node("div", "favorites");
+        for (const key of favorites) {
+          const favorite = button("", "favorite", () => { open(key, true); focusActiveTab(); });
+          favorite.setAttribute("aria-label", `Открыть ${pages[key].title} в новой вкладке`);
+          favorite.append(node("span", "favorite-icon", pages[key].icon), node("span", "favorite-label", pages[key].title));
+          grid.append(favorite);
+        }
+        home.append(grid);
+        const section = node("section", "recent");
+        section.append(node("h2", "section-title", "Недавно открытые"));
+        const list = node("div", "recent-list");
+        for (const key of recent) list.append(button(`${pages[key].icon}   ${pages[key].title}`, "recent-link", () => { open(key, true); focusActiveTab(); }));
+        section.append(list);
+        home.append(section);
+        content.replaceChildren(home);
+      }
+      function renderPage(key) {
+        const page = pages[key];
+        const wrap = node("div", "mock-page");
+        wrap.append(node("span", "mock-eyebrow", "Демостраница"), node("h1", "", page.title), node("p", "", page.description));
+        const panel = node("div", "mock-panel");
+        panel.append(node("strong", "", "Проверка интерфейса"), node("p", "", "Переключайте вкладки, вводите названия в адресную строку и проверяйте компоновку при изменении размера окна. Сайты здесь не загружаются."));
+        wrap.append(panel);
+        content.replaceChildren(wrap);
+      }
+      function render() {
+        const tab = current();
+        renderTabs();
+        address.value = pages[tab.page].address;
+        back.disabled = tab.position === 0;
+        forward.disabled = tab.position === tab.history.length - 1;
+        if (tab.page === "home") renderHome(); else renderPage(tab.page);
+        document.title = `${pages[tab.page].title} — Search (прототип)`;
+      }
+      function move(delta) {
+        const tab = current();
+        const position = tab.position + delta;
+        if (position < 0 || position >= tab.history.length) return;
+        tab.position = position;
+        tab.page = tab.history[position];
+        render();
+      }
+      back.addEventListener("click", () => move(-1));
+      forward.addEventListener("click", () => move(1));
+      document.getElementById("new-tab").addEventListener("click", () => open("home", true));
+      const theme = document.getElementById("theme");
+      theme.addEventListener("click", () => {
+        document.documentElement.dataset.theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+        const light = document.documentElement.dataset.theme === "light";
+        theme.setAttribute("aria-pressed", String(light));
+        theme.setAttribute("aria-label", light ? "Светлая тема включена" : "Светлая тема");
+        theme.title = light ? "Светлая тема включена" : "Светлая тема";
+      });
+      address.addEventListener("keydown", event => {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        const query = address.value.trim().toLocaleLowerCase("ru");
+        const page = Object.keys(pages).find(key => query === key || query === pages[key].title.toLocaleLowerCase("ru") || query === pages[key].address);
+        if (page) open(page);
+        else {
+          address.value = "Только локальные демостраницы";
+          address.select();
+        }
+      });
+      document.addEventListener("keydown", event => {
+        if (!(event.metaKey || event.ctrlKey)) return;
+        const key = event.key.toLowerCase();
+        if (key === "t") { event.preventDefault(); open("home", true); }
+        if (key === "w") { event.preventDefault(); close(activeId); }
+        if (key === "l") { event.preventDefault(); address.focus(); address.select(); }
+      });
+      tablist.addEventListener("keydown", event => {
+        if (event.target.getAttribute("role") !== "tab") return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        const index = tabs.findIndex(tab => tab.id === activeId);
+        const next = (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        activeId = tabs[next].id;
+        render();
+        focusActiveTab();
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

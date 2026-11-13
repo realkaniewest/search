@@ -19,6 +19,8 @@ jobs:
         run: python3 tools/check_project.py
       - name: Check Servo profile verdict logic
         run: PYTHONDONTWRITEBYTECODE=1 python3 prototypes/servo-mac-profiles/test_verdict.py
+      - name: Check UI shell interactions
+        run: node prototypes/ui-shell/check-ui.mjs
 
   wry-macos:
     runs-on: macos-26
