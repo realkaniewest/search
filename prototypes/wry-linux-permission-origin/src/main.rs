@@ -28,9 +28,12 @@ use tao::{
     platform::unix::WindowExtUnix,
     window::WindowBuilder,
 };
+use webkit2gtk::{SettingsExt, WebViewExt};
 use wry::{PermissionResponse, WebViewBuilder, WebViewBuilderExtUnix, WebViewExtUnix};
 
 const TIMEOUT: Duration = Duration::from_secs(25);
+const MAX_NATIVE_EVENTS: usize = 64;
+static EVENT_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 // The Rust webkit2gtk binding used by Wry 0.57.1 omits this signal and its
 // boxed query type. Keep this small C ABI bridge in the research probe only.
@@ -57,6 +60,7 @@ unsafe extern "C" {
 
 #[derive(Debug, Clone)]
 struct Query {
+    sequence: usize,
     name: String,
     origin: String,
 }
@@ -93,10 +97,13 @@ unsafe extern "C" fn query_callback(
     };
     let records = unsafe { &*(data.cast::<Arc<Mutex<Vec<Query>>>>()) };
     if let Ok(mut entries) = records.lock() {
-        entries.push(Query {
-            name,
-            origin: formatted,
-        });
+        if entries.len() < MAX_NATIVE_EVENTS {
+            entries.push(Query {
+                sequence: EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1,
+                name,
+                origin: formatted,
+            });
+        }
     }
     // FALSE lets WebKit continue with its default PROMPT state. The separate
     // Wry permission handler below always denies actual device access.
@@ -114,7 +121,8 @@ fn html(context: &str, cross_port: u16, token: &str) -> String {
     let iframes = if context == "top" {
         format!(
             "<iframe id='same' src='/same' allow='camera; microphone'></iframe>\
-             <iframe id='cross' src='http://127.0.0.1:{cross_port}/' allow='camera; microphone'></iframe>"
+             <iframe id='cross' src='http://127.0.0.1:{cross_port}/' allow='camera; microphone'></iframe>\
+             <iframe id='blocked' src='http://127.0.0.1:{cross_port}/no-allow'></iframe>"
         )
     } else {
         String::new()
@@ -132,9 +140,11 @@ fn html(context: &str, cross_port: u16, token: &str) -> String {
                await report('query' + attempt, result.state); }}\
              catch (e) {{ await report('query' + attempt, e.name); }}\
            }}\
-           try {{ const stream = await navigator.mediaDevices.getUserMedia({{video:true}});\
-             stream.getTracks().forEach(track => track.stop()); await report('gum', 'resolved'); }}\
-           catch (e) {{ await report('gum', e.name); }}\
+           for (let attempt = 1; attempt <= 2; attempt++) {{\
+             try {{ const stream = await navigator.mediaDevices.getUserMedia({{video:true}});\
+               stream.getTracks().forEach(track => track.stop()); await report('gum' + attempt, 'resolved'); }}\
+             catch (e) {{ await report('gum' + attempt, e.name); }}\
+           }}\
          }}\
          run();</script>"
     )
@@ -144,6 +154,7 @@ fn serve(
     mut stream: TcpStream,
     page: &str,
     same_page: Option<&str>,
+    blocked_page: Option<&str>,
     sender: &mpsc::Sender<String>,
     cross_port: u16,
     server_port: u16,
@@ -185,6 +196,8 @@ fn serve(
         ("200 OK", page)
     } else if path == "/same" {
         same_page.map_or(("404 Not Found", "not found"), |page| ("200 OK", page))
+    } else if path == "/no-allow" {
+        blocked_page.map_or(("404 Not Found", "not found"), |page| ("200 OK", page))
     } else if let Some(report) = path.strip_prefix(&format!("/report/{token}/")) {
         if report.len() <= 100 && report.is_ascii() {
             let _ = sender.send(report.to_owned());
@@ -206,6 +219,7 @@ fn start_server(
     listener: TcpListener,
     page: String,
     same_page: Option<String>,
+    blocked_page: Option<String>,
     sender: mpsc::Sender<String>,
     cross_port: u16,
     server_port: u16,
@@ -218,6 +232,7 @@ fn start_server(
                     stream,
                     &page,
                     same_page.as_deref(),
+                    blocked_page.as_deref(),
                     &sender,
                     cross_port,
                     server_port,
@@ -248,6 +263,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         top,
         html("top", frame_port, &token),
         Some(html("same", frame_port, &token)),
+        None,
         sender.clone(),
         frame_port,
         top_port,
@@ -257,6 +273,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         frame,
         html("cross", top_port, &token),
         None,
+        Some(html("blocked", top_port, &token)),
         sender,
         frame_port,
         frame_port,
@@ -277,12 +294,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_url("about:blank")
         .with_incognito(true)
         .with_permission_handler(move |kind| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            eprintln!("WRY_PERMISSION_REQUEST {kind:?} DENY");
+            let count = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            let sequence = EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+            if count <= MAX_NATIVE_EVENTS {
+                eprintln!("WRY_PERMISSION_REQUEST seq={sequence} {kind:?} DENY");
+            }
             PermissionResponse::Deny
         })
         .build_gtk(box_widget)?;
     let native_view = view.webview();
+    let settings = native_view
+        .settings()
+        .ok_or("WebKitGTK settings unavailable")?;
+    settings.set_enable_media_stream(true);
+    settings.set_enable_mock_capture_devices(true);
+    if !settings.enables_media_stream() || !settings.enables_mock_capture_devices() {
+        return Err("WebKitGTK mock media settings were not enabled".into());
+    }
+    eprintln!("MEDIA_SETTINGS media_stream=true mock_capture_devices=true");
     let callback: unsafe extern "C" fn() = unsafe {
         std::mem::transmute::<
             unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> c_int,
@@ -314,10 +343,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             eprintln!("PAGE_REPORT {report}");
             reports.push(report);
         }
-        if reports.len() >= 9 || started.elapsed() >= TIMEOUT {
+        if reports.len() >= 16 || started.elapsed() >= TIMEOUT {
             if let Ok(entries) = records.lock() {
                 for entry in entries.iter() {
-                    eprintln!("QUERY name={} origin={}", entry.name, entry.origin);
+                    eprintln!("QUERY seq={} name={} origin={}", entry.sequence, entry.name, entry.origin);
                 }
                 let top_seen = entries
                     .iter()
@@ -330,19 +359,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                     reports.len(), denied_count.load(Ordering::SeqCst)
                 );
             }
-            let unsafe_grant = reports.iter().any(|value| value.contains("-gum/resolved%7C"));
+            let unsafe_grant = reports
+                .iter()
+                .any(|value| value.contains("-gum") && value.contains("/resolved%7C"));
             let top_report_origin = format!("http%3A%2F%2F127.0.0.1%3A{top_port}");
             let cross_report_origin = format!("http%3A%2F%2F127.0.0.1%3A{frame_port}");
             let complete = [
                 ("top-query1/", &top_report_origin),
                 ("top-query2/", &top_report_origin),
-                ("top-gum/", &top_report_origin),
+                ("top-gum1/", &top_report_origin),
+                ("top-gum2/", &top_report_origin),
                 ("same-query1/", &top_report_origin),
                 ("same-query2/", &top_report_origin),
-                ("same-gum/", &top_report_origin),
+                ("same-gum1/", &top_report_origin),
+                ("same-gum2/", &top_report_origin),
                 ("cross-query1/", &cross_report_origin),
                 ("cross-query2/", &cross_report_origin),
-                ("cross-gum/", &cross_report_origin),
+                ("cross-gum1/", &cross_report_origin),
+                ("cross-gum2/", &cross_report_origin),
+                ("blocked-query1/", &cross_report_origin),
+                ("blocked-query2/", &cross_report_origin),
+                ("blocked-gum1/", &cross_report_origin),
+                ("blocked-gum2/", &cross_report_origin),
             ]
             .iter()
             .all(|(prefix, origin)| {
@@ -352,7 +390,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             });
             *control_flow = ControlFlow::ExitWithCode(if unsafe_grant {
                 2
-            } else if complete {
+            } else if complete && denied_count.load(Ordering::SeqCst) > 0 {
                 0
             } else {
                 1
