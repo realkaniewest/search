@@ -96,14 +96,14 @@ unsafe extern "C" fn query_callback(
         format!("{scheme}://{host}:{port}")
     };
     let records = unsafe { &*(data.cast::<Arc<Mutex<Vec<Query>>>>()) };
-    if let Ok(mut entries) = records.lock() {
-        if entries.len() < MAX_NATIVE_EVENTS {
-            entries.push(Query {
-                sequence: EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1,
-                name,
-                origin: formatted,
-            });
-        }
+    if let Ok(mut entries) = records.lock()
+        && entries.len() < MAX_NATIVE_EVENTS
+    {
+        entries.push(Query {
+            sequence: EVENT_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1,
+            name,
+            origin: formatted,
+        });
     }
     // FALSE lets WebKit continue with its default PROMPT state. The separate
     // Wry permission handler below always denies actual device access.
@@ -150,11 +150,15 @@ fn html(context: &str, cross_port: u16, token: &str) -> String {
     )
 }
 
+struct ServerPages {
+    root: String,
+    same: Option<String>,
+    blocked: Option<String>,
+}
+
 fn serve(
     mut stream: TcpStream,
-    page: &str,
-    same_page: Option<&str>,
-    blocked_page: Option<&str>,
+    pages: &ServerPages,
     sender: &mpsc::Sender<String>,
     cross_port: u16,
     server_port: u16,
@@ -193,11 +197,17 @@ fn serve(
     let (status, body) = if !host_valid || !origin_valid {
         ("403 Forbidden", "invalid local origin")
     } else if path == "/" {
-        ("200 OK", page)
+        ("200 OK", pages.root.as_str())
     } else if path == "/same" {
-        same_page.map_or(("404 Not Found", "not found"), |page| ("200 OK", page))
+        pages
+            .same
+            .as_deref()
+            .map_or(("404 Not Found", "not found"), |page| ("200 OK", page))
     } else if path == "/no-allow" {
-        blocked_page.map_or(("404 Not Found", "not found"), |page| ("200 OK", page))
+        pages
+            .blocked
+            .as_deref()
+            .map_or(("404 Not Found", "not found"), |page| ("200 OK", page))
     } else if let Some(report) = path.strip_prefix(&format!("/report/{token}/")) {
         if report.len() <= 100 && report.is_ascii() {
             let _ = sender.send(report.to_owned());
@@ -217,9 +227,7 @@ fn serve(
 
 fn start_server(
     listener: TcpListener,
-    page: String,
-    same_page: Option<String>,
-    blocked_page: Option<String>,
+    pages: ServerPages,
     sender: mpsc::Sender<String>,
     cross_port: u16,
     server_port: u16,
@@ -228,16 +236,7 @@ fn start_server(
     thread::spawn(move || {
         for stream in listener.incoming() {
             match stream {
-                Ok(stream) => serve(
-                    stream,
-                    &page,
-                    same_page.as_deref(),
-                    blocked_page.as_deref(),
-                    &sender,
-                    cross_port,
-                    server_port,
-                    &token,
-                ),
+                Ok(stream) => serve(stream, &pages, &sender, cross_port, server_port, &token),
                 Err(error) => eprintln!("LOCAL_SERVER_ERROR {error}"),
             }
         }
@@ -261,9 +260,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (sender, receiver) = mpsc::channel();
     start_server(
         top,
-        html("top", frame_port, &token),
-        Some(html("same", frame_port, &token)),
-        None,
+        ServerPages {
+            root: html("top", frame_port, &token),
+            same: Some(html("same", frame_port, &token)),
+            blocked: None,
+        },
         sender.clone(),
         frame_port,
         top_port,
@@ -271,9 +272,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     start_server(
         frame,
-        html("cross", top_port, &token),
-        None,
-        Some(html("blocked", top_port, &token)),
+        ServerPages {
+            root: html("cross", top_port, &token),
+            same: None,
+            blocked: Some(html("blocked", top_port, &token)),
+        },
         sender,
         frame_port,
         frame_port,
