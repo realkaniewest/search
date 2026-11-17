@@ -100,6 +100,14 @@ jobs:
         run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-download/Cargo.toml -- -D warnings
       - name: Build download probe
         run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-download/Cargo.toml
+      - name: Format public-site research probe
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-public-sites/Cargo.toml --check
+      - name: Clippy public-site research probe
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-public-sites/Cargo.toml -- -D warnings
+      - name: Test public-site research probe
+        run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-public-sites/Cargo.toml
+      - name: Build public-site research probe
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-public-sites/Cargo.toml
 
   wry-platform-build:
     strategy:
