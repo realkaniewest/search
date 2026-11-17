@@ -26,6 +26,50 @@ jobs:
       - name: Check Servo comparison runner
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s prototypes/servo-comparison -p 'test_run.py'
 
+  search-first-window:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Linux WebKitGTK development files
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+      - name: Install Rust tools
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format Search
+        run: cargo +1.99.1 fmt --manifest-path apps/search/Cargo.toml --check
+      - name: Clippy Search
+        run: cargo +1.99.1 clippy --locked --manifest-path apps/search/Cargo.toml -- -D warnings
+      - name: Test Search
+        run: cargo +1.99.1 test --locked --manifest-path apps/search/Cargo.toml
+      - name: Build Search
+        run: cargo +1.99.1 build --locked --manifest-path apps/search/Cargo.toml
+      - name: Run Search first window on macOS
+        if: runner.os == 'macOS'
+        run: python3 tools/run_search_smoke.py apps/search/target/debug/search-browser --smoke
+      - name: Check Search page boundary on macOS
+        if: runner.os == 'macOS'
+        run: python3 tools/run_search_security_smoke.py apps/search/target/debug/search-browser
+      - name: Run Search first window on Windows
+        if: runner.os == 'Windows'
+        run: python tools/run_search_smoke.py apps/search/target/debug/search-browser.exe --smoke
+      - name: Check Search page boundary on Windows
+        if: runner.os == 'Windows'
+        run: python tools/run_search_security_smoke.py apps/search/target/debug/search-browser.exe
+      - name: Run Search first window on Linux Xvfb
+        if: runner.os == 'Linux'
+        run: python3 tools/run_search_smoke.py xvfb-run -a --server-args='-screen 0 1280x800x24' apps/search/target/debug/search-browser --smoke
+      - name: Check Search page boundary on Linux Xvfb
+        if: runner.os == 'Linux'
+        run: python3 tools/run_search_security_smoke.py xvfb-run -a --server-args='-screen 0 1280x800x24' apps/search/target/debug/search-browser
+
   wry-comparison:
     strategy:
       fail-fast: false
