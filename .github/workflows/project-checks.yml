@@ -21,6 +21,8 @@ jobs:
         run: PYTHONDONTWRITEBYTECODE=1 python3 prototypes/servo-mac-profiles/test_verdict.py
       - name: Check UI shell interactions
         run: node prototypes/ui-shell/check-ui.mjs
+      - name: Check Search chrome keyboard controls
+        run: node apps/search/check-chrome.mjs
       - name: Check comparison fixtures
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s prototypes/engine-fixtures -p 'test_comparison_server.py'
       - name: Check Servo comparison runner
