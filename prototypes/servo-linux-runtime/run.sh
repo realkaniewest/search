@@ -8,8 +8,10 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 workdir=$(mktemp -d)
 server_pid=
 servo_pid=
+comparison_pid=
 cleanup() {
   if [[ -n "$servo_pid" ]]; then kill "$servo_pid" 2>/dev/null || true; wait "$servo_pid" 2>/dev/null || true; fi
+  if [[ -n "$comparison_pid" ]]; then kill "$comparison_pid" 2>/dev/null || true; wait "$comparison_pid" 2>/dev/null || true; fi
   if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; fi
   rm -rf "$workdir"
 }
@@ -61,3 +63,15 @@ if ! grep -q 'GET /probe.html HTTP/1.1" 200' "$workdir/server.log"; then
   exit 1
 fi
 echo "PASS: ServoShell requested local page and rendered $pixels JavaScript-colored pixels"
+kill "$servo_pid" 2>/dev/null || true
+wait "$servo_pid" 2>/dev/null || true
+servo_pid=
+
+python3 -u "$root/prototypes/engine-fixtures/comparison_server.py" >"$workdir/comparison-server.log" 2>&1 &
+comparison_pid=$!
+for _ in {1..30}; do
+  if curl --fail --silent http://127.0.0.1:43130/health >/dev/null; then break; fi
+  if ! kill -0 "$comparison_pid" 2>/dev/null; then cat "$workdir/comparison-server.log"; exit 1; fi
+  sleep 0.2
+done
+PYTHONDONTWRITEBYTECODE=1 python3 "$root/prototypes/servo-comparison/run.py" --binary "$workdir/servo/servoshell"

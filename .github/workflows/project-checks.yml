@@ -21,6 +21,46 @@ jobs:
         run: PYTHONDONTWRITEBYTECODE=1 python3 prototypes/servo-mac-profiles/test_verdict.py
       - name: Check UI shell interactions
         run: node prototypes/ui-shell/check-ui.mjs
+      - name: Check comparison fixtures
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s prototypes/engine-fixtures -p 'test_comparison_server.py'
+      - name: Check Servo comparison runner
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s prototypes/servo-comparison -p 'test_run.py'
+
+  wry-comparison:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-2025, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Linux WebKitGTK and virtual display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+      - name: Install Rust tools
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format Wry comparison probe
+        run: cargo +1.99.1 fmt --manifest-path prototypes/wry-comparison/Cargo.toml --check
+      - name: Clippy Wry comparison probe
+        run: cargo +1.99.1 clippy --locked --manifest-path prototypes/wry-comparison/Cargo.toml -- -D warnings
+      - name: Test Wry comparison probe
+        run: cargo +1.99.1 test --locked --manifest-path prototypes/wry-comparison/Cargo.toml
+      - name: Build Wry comparison probe
+        run: cargo +1.99.1 build --locked --manifest-path prototypes/wry-comparison/Cargo.toml
+      - name: Run Wry comparison on macOS
+        if: runner.os == 'macOS'
+        run: PYTHONDONTWRITEBYTECODE=1 python3 prototypes/engine-fixtures/run_wry_comparison.py --binary prototypes/wry-comparison/target/debug/search-wry-comparison
+      - name: Run Wry comparison on Linux Xvfb
+        if: runner.os == 'Linux'
+        run: timeout 90s xvfb-run -a --server-args='-screen 0 1280x800x24' python3 prototypes/engine-fixtures/run_wry_comparison.py --binary prototypes/wry-comparison/target/debug/search-wry-comparison
+      - name: Run Wry comparison on Windows CI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python prototypes/engine-fixtures/run_wry_comparison.py --binary prototypes/wry-comparison/target/debug/search-wry-comparison.exe
 
   wry-macos:
     runs-on: macos-26
