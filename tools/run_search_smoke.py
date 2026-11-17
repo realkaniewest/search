@@ -11,7 +11,11 @@ def main() -> int:
         return 2
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=50, check=False)
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as error:
+        if error.stdout:
+            print(error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout, end="")
+        if error.stderr:
+            print(error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr, end="", file=sys.stderr)
         print("FAIL: Search first window smoke timed out", file=sys.stderr)
         return 1
     print(result.stdout, end="")
