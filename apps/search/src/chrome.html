@@ -5,7 +5,7 @@
   :root { color-scheme: dark; font: 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
   * { box-sizing: border-box; }
   body { margin: 0; background: #273034; color: #edf1f1; overflow: hidden; }
-  .bar { height: 76px; display: flex; align-items: center; gap: 8px; padding: 12px 16px 12px 78px; border-bottom: 1px solid #4b585b; background: linear-gradient(110deg,#303a3d,#252d31); }
+  .bar { position: relative; height: 76px; display: flex; align-items: center; gap: 8px; padding: 12px 16px 12px 78px; border-bottom: 1px solid #4b585b; background: linear-gradient(110deg,#303a3d,#252d31); }
   .brand { font-weight: 660; letter-spacing: -.04em; font-size: 16px; margin-right: 8px; color: #f2f5f4; }
   .tabs { display: flex; min-width: 0; flex: 1; gap: 5px; overflow-x: auto; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
@@ -20,18 +20,31 @@
   .tool:hover,.tab:hover { background: #ffffff25; }
   .address { width: clamp(180px,27vw,390px); height: 42px; border-radius: 15px; border: 1px solid #ffffff3b; background: #10181b80; color: #edf1f1; padding: 0 15px; outline: none; }
   .address:focus { border-color: #a3c2be; box-shadow: 0 0 0 2px #a3c2be28; }
+  .address[aria-invalid="true"] { border-color: #d4a8a3; }
+  .notice { position: absolute; bottom: 1px; right: 16px; max-width: min(390px,45vw); color: #efc2bc; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   :focus-visible { outline: 2px solid #b7d4d0; outline-offset: 2px; }
   @media(max-width:820px) { .bar { padding-left: 20px; } .brand { display:none; } .tab { flex-basis: 110px; } .address { width: 180px; } }
 </style>
-<div class="bar"><span class="brand">Search</span><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><input class="address" id="address" aria-label="Адрес" placeholder="Rust, Wikipedia, Excalidraw"></div>
+<div class="bar"><span class="brand">Search</span><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><input class="address" id="address" aria-label="Адрес" placeholder="Rust, Wikipedia, Excalidraw" aria-describedby="notice"><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <script>
   'use strict';
-  const tabs = document.getElementById('tabs'), address = document.getElementById('address');
+  const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice');
   const send = value => window.ipc.postMessage(JSON.stringify(value));
   document.getElementById('add').onclick = () => send({type:'new'});
   document.getElementById('back').onclick = () => send({type:'back'});
   document.getElementById('forward').onclick = () => send({type:'forward'});
-  address.addEventListener('keydown', e => { if(e.key==='Enter') { send({type:'open',value:address.value}); address.blur(); } });
+  address.addEventListener('keydown', e => {
+    if(e.key!=='Enter') return;
+    const command={type:'open',value:address.value};
+    const encoder=new TextEncoder();
+    if(encoder.encode(address.value).length>1024 || encoder.encode(JSON.stringify(command)).length>2048) {
+      notice.textContent='Адрес слишком длинный. Сократи его и попробуй снова.';
+      address.setAttribute('aria-invalid','true');
+      return;
+    }
+    send(command); address.blur();
+  });
+  address.addEventListener('input', () => { notice.textContent=''; address.setAttribute('aria-invalid','false'); });
   document.addEventListener('keydown', e => {
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:'new'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); address.focus(); address.select(); }
@@ -54,7 +67,9 @@
       close.onclick=()=>send({type:'close',index});
       button.onclick=()=>send({type:'select',index}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
-    if(document.activeElement!==address || activeChanged) address.value=state.tabs[state.active]?.url||'';
+    if(document.activeElement!==address || activeChanged) address.value=state.attempted_address ?? state.tabs[state.active]?.url ?? '';
+    notice.textContent=state.notice ?? '';
+    address.setAttribute('aria-invalid',state.notice?'true':'false');
     if(focusedIndex!==undefined && state.tabs.length) {
       const index=Math.min(Number(focusedIndex),state.tabs.length-1);
       tabs.querySelector(`[data-action="${focusedAction}"][data-index="${index}"]`)?.focus();

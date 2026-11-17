@@ -44,7 +44,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'add', 'back', 'forward'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'add', 'back', 'forward'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -56,7 +56,7 @@ const window = { ipc: { postMessage: message => messages.push(JSON.parse(message
 const html = readFileSync(new URL('./src/chrome.html', import.meta.url), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, 'Search chrome script exists');
-runInNewContext(script, { document, window, Number, JSON });
+runInNewContext(script, { document, window, Number, JSON, TextEncoder });
 
 const tabs = elements.get('tabs');
 window.renderSearch({active: 0, tabs: [
@@ -109,5 +109,25 @@ window.renderSearch({active: 1, tabs: [
   {label: 'Rust', url: 'https://rust-lang.org/learn'},
 ]});
 assert.equal(address.value, 'https://rust-lang.org/learn');
+
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start'},
+  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+], notice: 'Пока доступны только выбранные сайты.', attempted_address: 'https://blocked.invalid/'});
+assert.equal(address.value, 'https://blocked.invalid/', 'rejected address stays editable');
+assert.equal(address.getAttribute('aria-invalid'), 'true');
+assert.equal(elements.get('notice').textContent, 'Пока доступны только выбранные сайты.');
+address.dispatch('input');
+assert.equal(elements.get('notice').textContent, '');
+assert.equal(address.getAttribute('aria-invalid'), 'false');
+address.value = 'я'.repeat(600);
+const messagesBeforeLongAddress = messages.length;
+address.dispatch('keydown', {key: 'Enter'});
+assert.equal(messages.length, messagesBeforeLongAddress, 'oversize UTF-8 address never reaches IPC');
+assert.equal(address.getAttribute('aria-invalid'), 'true');
+assert.ok(elements.get('notice').textContent.includes('слишком длинный'));
+address.value = '\\'.repeat(1024);
+address.dispatch('keydown', {key: 'Enter'});
+assert.equal(messages.length, messagesBeforeLongAddress, 'escaped JSON over limit never reaches IPC');
 
 console.log('Search chrome keyboard and tab controls passed');
