@@ -13,6 +13,7 @@ $url = 'http://127.0.0.1:43132/probe.html'
 $expected = '0fca2f4d7e6107304631f7b9031edf0df2c3d88e0570cd19cde2ef90379bee8c'
 $server = $null
 $servo = $null
+$comparisonServer = $null
 New-Item -ItemType Directory -Path $work | Out-Null
 
 function Start-ProbeProcess {
@@ -68,8 +69,22 @@ try {
     if ($pixels -le 1000) { throw "Expected JavaScript-colored pixels missing: $pixels" }
     Write-Output "PASS: ServoShell requested local page and rendered $pixels sampled JavaScript-colored pixels in $($bitmap.Width)x$($bitmap.Height) PNG"
   } finally { $bitmap.Dispose() }
+
+  $comparisonScript = Join-Path $root 'prototypes/engine-fixtures/comparison_server.py'
+  $comparisonServer = Start-ProbeProcess -FilePath 'python' -Directory $root -Argv @('-u', $comparisonScript)
+  $comparisonReady = $false
+  for ($i = 0; $i -lt 40; $i++) {
+    if ($comparisonServer.HasExited) { throw "Comparison server exited early with code $($comparisonServer.ExitCode)" }
+    try {
+      $response = Invoke-WebRequest -Uri 'http://127.0.0.1:43130/health' -TimeoutSec 2
+      if ($response.StatusCode -eq 200) { $comparisonReady = $true; break }
+    } catch { Start-Sleep -Milliseconds 250 }
+  }
+  if (-not $comparisonReady) { throw 'Comparison server did not become ready' }
+  & python (Join-Path $root 'prototypes/servo-comparison/run.py') --binary $exe
+  if ($LASTEXITCODE -ne 0) { throw "Servo comparison failed with code $LASTEXITCODE" }
 } finally {
-  foreach ($process in @($servo, $server)) {
+  foreach ($process in @($comparisonServer, $servo, $server)) {
     if ($null -ne $process -and -not $process.HasExited) {
       & taskkill.exe /PID $process.Id /T /F 2>$null | Out-Null
     }
