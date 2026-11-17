@@ -216,9 +216,17 @@ struct TabInfo<'a> {
 struct ChromeState<'a> {
     active: usize,
     tabs: Vec<TabInfo<'a>>,
+    notice: Option<&'static str>,
+    attempted_address: Option<&'a str>,
 }
 
-fn sync_chrome(chrome: &WebView, tabs: &[Tab], active: usize) {
+fn sync_chrome(
+    chrome: &WebView,
+    tabs: &[Tab],
+    active: usize,
+    notice: Option<&'static str>,
+    attempted_address: Option<&str>,
+) {
     let state = ChromeState {
         active,
         tabs: tabs
@@ -228,6 +236,8 @@ fn sync_chrome(chrome: &WebView, tabs: &[Tab], active: usize) {
                 url: &tab.display_url,
             })
             .collect(),
+        notice,
+        attempted_address,
     };
     if let Ok(json) = serde_json::to_string(&state) {
         let _ = chrome.evaluate_script(&format!("window.renderSearch({json})"));
@@ -401,6 +411,8 @@ fn main() {
     let mut next_id = 2u64;
     let mut chrome_ready = false;
     let mut content_ready = false;
+    let mut notice = None;
+    let mut attempted_address: Option<String> = None;
     let content_proxy = event_loop.create_proxy();
 
     event_loop.run(move |event, _, control_flow| {
@@ -410,7 +422,7 @@ fn main() {
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if mode == Mode::Smoke { println!("SMOKE: chrome loaded"); }
                 chrome_ready = true;
-                sync_chrome(&chrome, &tabs, active);
+                sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                 if mode == Mode::Smoke && content_ready {
                     println!("PASS: Search chrome and start content loaded");
                     *control_flow = ControlFlow::ExitWithCode(0);
@@ -428,7 +440,7 @@ fn main() {
                     tab.display_url = display_url;
                     tab.pending_start_return = false;
                     if chrome_ready {
-                        sync_chrome(&chrome, &tabs, active);
+                        sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                     }
                 }
                 if mode == Mode::Smoke && chrome_ready && content_ready {
@@ -454,6 +466,8 @@ fn main() {
                 *control_flow = ControlFlow::ExitWithCode(1);
             }
             Event::UserEvent(AppEvent::Command(command)) => {
+                notice = None;
+                attempted_address = None;
                 match command {
                     Command::New if tabs.len() < MAX_TABS => {
                         let (_, rect) = bounds(&window);
@@ -522,7 +536,13 @@ fn main() {
                                     tabs[active].has_start_entry = true;
                                 }
                                 tabs[active].pending_start_return = false;
+                            } else {
+                                notice = Some("Не удалось открыть страницу. Попробуй ещё раз.");
+                                attempted_address = Some(value);
                             }
+                        } else {
+                            notice = Some("Пока доступны Rust, Wikipedia, Excalidraw и local.");
+                            attempted_address = Some(value);
                         }
                     }
                     Command::Back => {
@@ -536,7 +556,7 @@ fn main() {
                     _ => {}
                 }
                 if chrome_ready {
-                    sync_chrome(&chrome, &tabs, active);
+                    sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                 }
             }
             Event::WindowEvent {
