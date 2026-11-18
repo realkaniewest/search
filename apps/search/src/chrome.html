@@ -29,9 +29,11 @@
   .address:focus { border-color: #bcbec2; box-shadow: 0 0 0 3px #ffffff18; }
   .address[aria-invalid="true"] { border-color: #d4a8a3; }
   .notice { position: absolute; bottom: 1px; right: 16px; max-width: min(390px,45vw); color: #efc2bc; font-size: 11px; background: #262830; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar:has(.address[aria-invalid="true"]) { align-items: flex-start; padding-top: 3px; }
   .activity { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   :focus-visible { outline: 2px solid #d0d0d2; outline-offset: 2px; }
   @media(max-width:820px) { .bar { padding-left: 16px; gap: 5px; } .navigation { margin-right: 1px; } .tab { flex-basis: 110px; } .address { width: 190px; } }
+  .mac-toolbar .bar { padding-left: 82px; }
 </style>
 <div class="bar"><div class="navigation"><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <script>

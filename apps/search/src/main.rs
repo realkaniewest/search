@@ -350,7 +350,14 @@ fn main() {
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
         .with_min_inner_size(LogicalSize::new(680.0, 420.0));
     #[cfg(target_os = "macos")]
-    let window_builder = window_builder.with_transparent(true);
+    let window_builder = {
+        use tao::platform::macos::WindowBuilderExtMacOS;
+        window_builder
+            .with_transparent(true)
+            .with_titlebar_transparent(true)
+            .with_title_hidden(true)
+            .with_fullsize_content_view(true)
+    };
     let window = window_builder
         .build(&event_loop)
         .expect("Search window creation failed");
@@ -382,6 +389,9 @@ fn main() {
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
         .with_html(include_str!("chrome.html"))
+        .with_initialization_script(if cfg!(target_os = "macos") {
+            "document.documentElement?.classList.add('mac-toolbar'); document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar'));"
+        } else { "" })
         .with_incognito(true)
         .with_permission_handler(deny_permission)
         .with_download_started_handler(|_, _| false)
