@@ -23,7 +23,9 @@
   .tab .close { flex: none; width: 25px; height: 25px; border: 0; border-radius: 50%; background: none; color: inherit; opacity: .6; font-size: 17px; cursor: pointer; }
   .tab .close:hover { background: #ffffff22; opacity: 1; }
   .tool { flex: none; height: 32px; min-width: 32px; border: 0; border-radius: 12px; color: #c9c9cb; background: transparent; cursor: pointer; font-size: 21px; }
-  .tool:hover,.tab:hover { background: #ffffff17; }
+  .reload { font-size: 17px; }
+  .tool:disabled { opacity: .45; cursor: default; }
+  .tool:enabled:hover,.tab:hover { background: #ffffff17; }
   .address { width: clamp(190px,29vw,410px); height: 32px; border-radius: 16px; border: 1px solid #ffffff38; background: linear-gradient(#ffffff16, #ffffff06); color: #f2f2f2; padding: 0 12px; outline: none; box-shadow: inset 0 1px #ffffff14; }
   .address::placeholder { color: #a8a8aa; }
   .address:focus { border-color: #bcbec2; box-shadow: 0 0 0 3px #ffffff18; }
@@ -57,7 +59,7 @@
     }
   }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <script>
   'use strict';
   const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice'), activity = document.getElementById('activity');
@@ -65,8 +67,9 @@
   document.getElementById('add').onclick = () => send({type:'new'});
   document.getElementById('back').onclick = () => send({type:'back'});
   document.getElementById('forward').onclick = () => send({type:'forward'});
+  document.getElementById('reload').onclick = () => send({type:'reload'});
   address.addEventListener('keydown', e => {
-    if(e.key!=='Enter') return;
+    if(e.key!=='Enter' || e.isComposing || !address.value.trim()) return;
     const command={type:'open',value:address.value};
     const encoder=new TextEncoder();
     if(encoder.encode(address.value).length>1024 || encoder.encode(JSON.stringify(command)).length>2048) {
@@ -80,6 +83,7 @@
   document.addEventListener('keydown', e => {
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:'new'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); address.focus(); address.select(); }
+    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') { e.preventDefault(); send({type:'close',index:window.searchState.active}); }
   });
   window.searchState = {active:0,tabs:[]};
@@ -89,6 +93,7 @@
     const focusedAction = focused?.dataset?.action;
     const activeChanged = state.active !== window.searchState.active;
     window.searchState = state;
+    document.getElementById('reload').disabled = !state.tabs[state.active] || state.tabs[state.active].url === 'search:start';
     tabs.replaceChildren();
     state.tabs.forEach((tab,index) => {
       const item = document.createElement('div'); item.className='tab'+(index===state.active?' active':'')+(index===state.active && activeChanged?' just-selected':'');
@@ -100,7 +105,10 @@
       button.onclick=()=>send({type:'select',index}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
     tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
-    if(document.activeElement!==address || activeChanged) address.value=state.attempted_address ?? state.tabs[state.active]?.url ?? '';
+    if(document.activeElement!==address || activeChanged) {
+      const url = state.tabs[state.active]?.url;
+      address.value = state.attempted_address ?? (url === 'search:start' ? '' : url ?? '');
+    }
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
     address.setAttribute('aria-invalid',state.notice?'true':'false');

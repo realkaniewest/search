@@ -45,7 +45,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -65,6 +65,7 @@ window.renderSearch({active: 0, tabs: [
   {label: 'Rust', url: 'https://rust-lang.org/'},
 ]});
 assert.equal(tabs.children.length, 2);
+assert.equal(elements.get('reload').disabled, true, 'start page has no reload history entry');
 assert.equal(tabs.children[0].children[0].getAttribute('role'), 'tab');
 assert.equal(tabs.children[0].children[1].tagName, 'button', 'close is a separate keyboard button');
 assert.equal(tabs.children[0].children[0].tabIndex, 0);
@@ -76,6 +77,7 @@ window.renderSearch({active: 1, tabs: [
   {label: 'Rust', url: 'https://rust-lang.org/', loading: true},
 ]});
 assert.equal(elements.get('activity').textContent, 'Загрузка страницы…');
+assert.equal(elements.get('reload').disabled, false);
 assert.equal(tabs.children[1].children[0].getAttribute('aria-label'), 'Rust загружается');
 assert.equal(tabs.children[1].children[0].children[0].className, 'dot loading');
 assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible');
@@ -111,6 +113,9 @@ assert.deepEqual(messages.pop(), {type: 'close', index: 0});
 tabs.children[1].children[1].dispatch('click');
 assert.deepEqual(messages.pop(), {type: 'close', index: 1});
 
+elements.get('reload').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'reload'});
+
 const address = elements.get('address');
 address.focus();
 address.value = 'https://www.wikipedia.org/wiki/Rust';
@@ -123,7 +128,7 @@ window.renderSearch({active: 0, tabs: [
   {label: 'Новая вкладка', url: 'search:start'},
   {label: 'Rust', url: 'https://rust-lang.org/learn'},
 ]});
-assert.equal(address.value, 'search:start', 'switching tabs must replace the old typed URL');
+assert.equal(address.value, '', 'switching tabs must replace the old typed URL');
 address.blur();
 window.renderSearch({active: 1, tabs: [
   {label: 'Новая вкладка', url: 'search:start'},

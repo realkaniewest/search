@@ -72,6 +72,7 @@ enum Command {
     Open { value: String },
     Back,
     Forward,
+    Reload,
 }
 
 #[derive(Debug)]
@@ -630,6 +631,11 @@ fn main() {
                     Command::Back => {
                         tabs[active].pending_start_return = tabs[active].has_start_entry;
                         let _ = tabs[active].view.go_back();
+                    }
+                    Command::Reload if !matches!(tabs[active].page, Page::Start) => {
+                        if tabs[active].view.reload().is_err() {
+                            notice = Some("Не удалось обновить страницу.");
+                        }
                     }
                     Command::Forward => {
                         tabs[active].pending_start_return = false;
