@@ -240,6 +240,7 @@ fn safe_title(raw: &str) -> Option<String> {
 
 #[derive(Serialize)]
 struct TabInfo<'a> {
+    id: u64,
     label: &'a str,
     url: &'a str,
     loading: bool,
@@ -265,6 +266,7 @@ fn sync_chrome(
         tabs: tabs
             .iter()
             .map(|tab| TabInfo {
+                id: tab.id,
                 label: &tab.title,
                 url: &tab.display_url,
                 loading: tab.loading,
