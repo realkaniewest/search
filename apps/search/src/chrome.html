@@ -166,7 +166,31 @@
     send(command); address.blur();
   });
   address.addEventListener('input', () => { notice.textContent=''; address.setAttribute('aria-invalid','false'); });
+  function tabShortcut(event, state) {
+    if (event.altKey || !state.tabs.length) return;
+    const count = state.tabs.length;
+    if (event.ctrlKey && !event.metaKey && event.key === 'Tab') {
+      const direction = event.shiftKey ? -1 : 1;
+      return state.tabs[(state.active + direction + count) % count];
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && /^[1-9]$/.test(event.key)) {
+      return state.tabs[event.key === '9' ? count - 1 : Number(event.key) - 1];
+    }
+  }
   document.addEventListener('keydown', e => {
+    if (e.isComposing || e.defaultPrevented) return;
+    const target = tabShortcut(e, window.searchState);
+    if (target) {
+      e.preventDefault();
+      if (target.id !== window.searchState.tabs[window.searchState.active]?.id) {
+        if (document.activeElement?.getAttribute('role') === 'tab') {
+          const index = window.searchState.tabs.indexOf(target);
+          tabs.querySelector(`[role="tab"][data-index="${index}"]`)?.focus({preventScroll:true});
+        }
+        send({type:'select',id:target.id});
+      }
+      return;
+    }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:'new'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); editAddress(); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
