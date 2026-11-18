@@ -117,12 +117,16 @@ impl Page {
     }
 }
 
-fn allowed_url(raw: &str) -> Option<Page> {
+fn validated_url(raw: &str) -> Option<(Page, Url)> {
+    // Accept one URL spelling for validation, navigation and the address bar.
+    if raw.chars().any(|ch| ch.is_control() || ch == '\\') {
+        return None;
+    }
     let url = Url::parse(raw).ok()?;
     if !url.username().is_empty() || url.password().is_some() {
         return None;
     }
-    match (url.scheme(), url.host_str(), url.port_or_known_default()) {
+    let page = match (url.scheme(), url.host_str(), url.port_or_known_default()) {
         ("https", Some("rust-lang.org" | "www.rust-lang.org"), Some(443)) => Some(Page::Rust),
         (
             "https",
@@ -136,7 +140,12 @@ fn allowed_url(raw: &str) -> Option<Page> {
             Some(Page::LocalFixture)
         }
         _ => None,
-    }
+    }?;
+    Some((page, url))
+}
+
+fn allowed_url(raw: &str) -> Option<Page> {
+    validated_url(raw).map(|(page, _)| page)
 }
 
 fn page_from_input(raw: &str) -> Option<(Page, String)> {
@@ -147,7 +156,7 @@ fn page_from_input(raw: &str) -> Option<(Page, String)> {
         "excalidraw" => Page::Excalidraw,
         "local" => Page::LocalFixture,
         "search:start" => Page::Start,
-        _ => return allowed_url(input).map(|page| (page, input.to_owned())),
+        _ => return validated_url(input).map(|(page, url)| (page, url.into())),
     };
     Some((page, page.url().to_owned()))
 }
@@ -211,7 +220,7 @@ fn loaded_page(url: &str, pending_start_return: bool) -> Option<(Page, String)> 
     if url == "about:blank" && pending_start_return {
         return Some((Page::Start, Page::Start.url().to_owned()));
     }
-    allowed_url(url).map(|page| (page, url.to_owned()))
+    validated_url(url).map(|(page, url)| (page, url.into()))
 }
 
 fn safe_title(raw: &str) -> Option<String> {
@@ -303,7 +312,7 @@ fn create_content(
         .with_navigation_handler(move |target| {
             let allowed = target == "about:blank" || allowed_url(&target).is_some();
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
-                eprintln!("content navigation allowed={allowed} target={target}");
+                eprintln!("content navigation allowed={allowed}");
             }
             if !allowed {
                 navigation_counts
@@ -593,6 +602,9 @@ fn main() {
                             next_id += 1;
                         }
                     }
+                    Command::New => {
+                        notice = Some("Открыто 12 вкладок. Закрой одну, чтобы открыть новую.");
+                    }
                     Command::Select { index } if index < tabs.len() && index != active => {
                         let _ = tabs[active].view.set_visible(false);
                         active = index;
@@ -740,6 +752,15 @@ mod tests {
         ] {
             assert!(allowed_url(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn address_validation_rejects_ambiguous_input_and_uses_canonical_url() {
+        assert!(validated_url("https://rust-\nlang.org/").is_none());
+        assert!(validated_url(r"https://rust-lang.org\learn").is_none());
+        let (page, url) = page_from_input("HTTPS://RUST-LANG.ORG:443/learn").unwrap();
+        assert!(matches!(page, Page::Rust));
+        assert_eq!(url, "https://rust-lang.org/learn");
     }
 
     #[test]
