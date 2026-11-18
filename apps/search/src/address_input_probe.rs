@@ -23,7 +23,8 @@ fn classify(raw: &str) -> Input<'_> {
         return Input::InvalidAddress;
     }
 
-    let first = raw.split('/').next().unwrap_or_default();
+    let token = raw.split_whitespace().next().unwrap_or_default();
+    let first = token.split(['/', '?', '#']).next().unwrap_or_default();
     let explicit = raw.contains("://");
     let host_candidate = first.split(':').next().unwrap_or_default();
     let bare_host = host_candidate.contains('.')
@@ -37,11 +38,14 @@ fn classify(raw: &str) -> Input<'_> {
                 .all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte))
     });
 
+    if token.contains('@') {
+        return Input::InvalidAddress;
+    }
     if !explicit && !bare_host && !has_scheme {
         return Input::Search(raw);
     }
     if raw.chars().any(char::is_whitespace) {
-        return if explicit || (!bare_host && has_scheme) {
+        return if explicit || has_scheme || (bare_host && token.contains(['/', '?', '#', ':'])) {
             Input::InvalidAddress
         } else {
             Input::Search(raw)
@@ -111,6 +115,10 @@ fn unsafe_or_malformed_address_forms_do_not_turn_into_search_queries() {
         "https://a.test:99999/",
         "https://name:secret@example.org/",
         "name@example.org",
+        "name@example.org/docs more",
+        "example.org/one two",
+        "example.org:443 extra",
+        "example.org?q=one two",
         "https://exam\nple.org/",
         r"https://example.org\docs",
         "https://example.org/one two",
