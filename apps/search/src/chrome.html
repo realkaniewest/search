@@ -98,9 +98,10 @@
   }
   @media (prefers-reduced-transparency: reduce) { .bar { background: #292b31; } }
   @media (prefers-reduced-motion: no-preference) {
-    .tab.just-opened { animation: tab-open 180ms ease-out; }
-    .tab .address:not([hidden]) { animation: tab-open 140ms ease-out; }
-    @keyframes tab-open { from { opacity: 0; transform: translateY(3px) scale(.97); } }
+    .tab.just-opened { animation: tab-appear 120ms ease-out; }
+    .tab .address:not([hidden]) { animation: address-appear 140ms ease-out; }
+    @keyframes tab-appear { from { opacity: .55; } }
+    @keyframes address-appear { from { opacity: 0; transform: translateY(3px) scale(.97); } }
   }
 </style>
 <div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
