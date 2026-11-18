@@ -41,8 +41,7 @@ jobs:
       - name: Install Linux WebKitGTK development files
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+          bash tools/install-ubuntu-ci-deps.sh libwebkit2gtk-4.1-dev xvfb xauth
       - name: Install Rust tools
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
       - name: Format Search
@@ -85,8 +84,7 @@ jobs:
       - name: Install Linux WebKitGTK and virtual display
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+          bash tools/install-ubuntu-ci-deps.sh libwebkit2gtk-4.1-dev xvfb xauth
       - name: Install Rust tools
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
       - name: Format Wry comparison probe
@@ -168,8 +166,7 @@ jobs:
       - name: Install Linux WebKitGTK development files
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev
+          bash tools/install-ubuntu-ci-deps.sh libwebkit2gtk-4.1-dev
       - name: Install Rust tools
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
       - name: Format platform probe
@@ -187,8 +184,7 @@ jobs:
           persist-credentials: false
       - name: Install WebKitGTK and virtual display
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick
+          bash tools/install-ubuntu-ci-deps.sh libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick
       - name: Install Rust tools
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
       - name: Format Linux runtime probe
@@ -211,8 +207,7 @@ jobs:
           persist-credentials: false
       - name: Install WebKitGTK and virtual display
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev xvfb xauth
+          bash tools/install-ubuntu-ci-deps.sh libwebkit2gtk-4.1-dev xvfb xauth
       - name: Install Rust tools
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
       - name: Format permission diagnostic
@@ -252,8 +247,7 @@ jobs:
           persist-credentials: false
       - name: Install Servo runtime and virtual display dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth imagemagick libxcursor1 libxrandr2 libxi6 libxkbcommon0 libvulkan1 libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+          bash tools/install-ubuntu-ci-deps.sh xvfb xauth imagemagick libxcursor1 libxrandr2 libxi6 libxkbcommon0 libvulkan1 libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
       - name: Run pinned ServoShell release on a local page
         run: timeout 180s xvfb-run -a --server-args='-screen 0 1280x800x24' bash prototypes/servo-linux-runtime/run.sh
 
