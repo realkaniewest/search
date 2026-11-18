@@ -33,7 +33,7 @@ use wry::WebViewBuilderExtUnix;
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
 
-const CHROME_HEIGHT: f64 = 76.0;
+const CHROME_HEIGHT: f64 = 64.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
 const MAX_TABS: usize = 12;
 
@@ -77,7 +77,9 @@ enum Command {
 #[derive(Debug)]
 enum AppEvent {
     ChromeReady,
+    ContentStarted { id: u64, url: String },
     ContentLoaded { id: u64, url: String },
+    ContentTitle { id: u64, title: String },
     SecurityCheck,
     TimedOut,
     Command(Command),
@@ -194,6 +196,8 @@ struct Tab {
     id: u64,
     page: Page,
     display_url: String,
+    title: String,
+    loading: bool,
     has_start_entry: bool,
     pending_start_return: bool,
     view: WebView,
@@ -206,10 +210,25 @@ fn loaded_page(url: &str, pending_start_return: bool) -> Option<(Page, String)> 
     allowed_url(url).map(|page| (page, url.to_owned()))
 }
 
+fn safe_title(raw: &str) -> Option<String> {
+    let title: String = raw
+        .chars()
+        .take(160)
+        .filter(|ch| {
+            !ch.is_control()
+                && !matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        })
+        .take(80)
+        .collect();
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_owned())
+}
+
 #[derive(Serialize)]
 struct TabInfo<'a> {
-    label: &'static str,
+    label: &'a str,
     url: &'a str,
+    loading: bool,
 }
 
 #[derive(Serialize)]
@@ -232,8 +251,9 @@ fn sync_chrome(
         tabs: tabs
             .iter()
             .map(|tab| TabInfo {
-                label: tab.page.label(),
+                label: &tab.title,
                 url: &tab.display_url,
+                loading: tab.loading,
             })
             .collect(),
         notice,
@@ -288,10 +308,18 @@ fn create_content(
             }
             allowed
         })
-        .with_on_page_load_handler(move |event, url| {
-            if matches!(event, PageLoadEvent::Finished) {
-                let _ = proxy.send_event(AppEvent::ContentLoaded { id, url });
+        .with_on_page_load_handler({
+            let proxy = proxy.clone();
+            move |event, url| {
+                let app_event = match event {
+                    PageLoadEvent::Started => AppEvent::ContentStarted { id, url },
+                    PageLoadEvent::Finished => AppEvent::ContentLoaded { id, url },
+                };
+                let _ = proxy.send_event(app_event);
             }
+        })
+        .with_document_title_changed_handler(move |title| {
+            let _ = proxy.send_event(AppEvent::ContentTitle { id, title });
         });
     let builder = if matches!(page, Page::Start) {
         builder.with_html(include_str!("start.html"))
@@ -403,6 +431,8 @@ fn main() {
         id: 1,
         page: initial_page,
         display_url: initial_page.url().to_owned(),
+        title: initial_page.label().to_owned(),
+        loading: false,
         has_start_entry: matches!(initial_page, Page::Start),
         pending_start_return: false,
         view: first,
@@ -428,17 +458,36 @@ fn main() {
                     *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
+            Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
+                if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
+                    && (allowed_url(&url).is_some() || url == "about:blank")
+                {
+                    tab.loading = true;
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return) {
+                        tab.page = page;
+                        tab.display_url = display_url;
+                        tab.title = page.label().to_owned();
+                    }
+                    if chrome_ready {
+                        sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
+                    }
+                }
+            }
             Event::UserEvent(AppEvent::ContentLoaded { id, url }) => {
                 if mode == Mode::Smoke { println!("SMOKE: content {id} loaded at {url}"); }
                 if id == 1 {
                     content_ready = true;
                 }
-                if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
-                    && let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return)
-                {
-                    tab.page = page;
-                    tab.display_url = display_url;
-                    tab.pending_start_return = false;
+                if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id) {
+                    tab.loading = false;
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return) {
+                        tab.page = page;
+                        tab.display_url = display_url;
+                        tab.pending_start_return = false;
+                        if matches!(page, Page::Start) {
+                            tab.title = page.label().to_owned();
+                        }
+                    }
                     if chrome_ready {
                         sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                     }
@@ -448,12 +497,26 @@ fn main() {
                     *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
+            Event::UserEvent(AppEvent::ContentTitle { id, title }) => {
+                if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
+                    && !matches!(tab.page, Page::Start)
+                    && let Some(title) = safe_title(&title)
+                {
+                    tab.title = title;
+                    if chrome_ready {
+                        sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
+                    }
+                }
+            }
             Event::UserEvent(AppEvent::SecurityCheck) => {
                 let (nav, popup, download, permission) = security_counts.snapshot();
-                println!("SECURITY: fixture_loaded={content_ready} blocked_navigation={nav} blocked_popup={popup} blocked_download={download} denied_permission={permission}");
+                let title_verified = tabs
+                    .first()
+                    .is_some_and(|tab| tab.title == "Search security fixture ready");
+                println!("SECURITY: fixture_loaded={content_ready} title_verified={title_verified} blocked_navigation={nav} blocked_popup={popup} blocked_download={download} denied_permission={permission}");
                 // WebKitGTK can deny window.open before Wry's popup callback.
                 // The fixture separately checks that no popup was returned.
-                if content_ready && chrome_ready && nav > 0 && download > 0 {
+                if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
                     println!("PASS: Search security boundary checks");
                     *control_flow = ControlFlow::ExitWithCode(0);
                 } else {
@@ -496,6 +559,8 @@ fn main() {
                                 id: next_id,
                                 page: Page::Start,
                                 display_url: Page::Start.url().to_owned(),
+                                title: Page::Start.label().to_owned(),
+                                loading: false,
                                 has_start_entry: true,
                                 pending_start_return: false,
                                 view,
@@ -532,6 +597,8 @@ fn main() {
                             if result.is_ok() {
                                 tabs[active].page = page;
                                 tabs[active].display_url = url;
+                                tabs[active].title = page.label().to_owned();
+                                tabs[active].loading = !matches!(page, Page::Start);
                                 if matches!(page, Page::Start) {
                                     tabs[active].has_start_entry = true;
                                 }
@@ -632,7 +699,28 @@ mod tests {
     }
 
     #[test]
+    fn document_titles_are_bounded_and_strip_direction_controls() {
+        assert_eq!(safe_title("  Rust \n"), Some("Rust".to_owned()));
+        assert_eq!(safe_title("\u{202e}Wiki\u{202c}"), Some("Wiki".to_owned()));
+        assert_eq!(
+            safe_title("A\u{200f}B\u{061c}\u{200e}"),
+            Some("AB".to_owned())
+        );
+        assert_eq!(
+            safe_title("x".repeat(200).as_str())
+                .unwrap()
+                .chars()
+                .count(),
+            80
+        );
+        assert_eq!(safe_title("\n\t"), None);
+    }
+
+    #[test]
     fn back_to_embedded_start_restores_display_address() {
+        let (page, url) = loaded_page("https://rust-lang.org/", false).unwrap();
+        assert!(matches!(page, Page::Rust));
+        assert_eq!(url, "https://rust-lang.org/");
         let (page, url) = loaded_page("about:blank", true).unwrap();
         assert!(matches!(page, Page::Start));
         assert_eq!(url, "search:start");

@@ -19,6 +19,7 @@ class Element {
   focus() { document.activeElement = this; }
   blur() { document.activeElement = null; }
   select() {}
+  scrollIntoView(options) { this.scrolledWith = options; }
   closest(selector) { return selector === '[role="tab"]' && this.getAttribute('role') === 'tab' ? this : null; }
   querySelector(selector) {
     const action = selector.match(/data-action="([^"]+)"/)?.[1];
@@ -44,7 +45,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'add', 'back', 'forward'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -68,6 +69,21 @@ assert.equal(tabs.children[0].children[0].getAttribute('role'), 'tab');
 assert.equal(tabs.children[0].children[1].tagName, 'button', 'close is a separate keyboard button');
 assert.equal(tabs.children[0].children[0].tabIndex, 0);
 assert.equal(tabs.children[1].children[0].tabIndex, -1);
+assert.equal(elements.get('activity').textContent, '');
+
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start', loading: false},
+  {label: 'Rust', url: 'https://rust-lang.org/', loading: true},
+]});
+assert.equal(elements.get('activity').textContent, 'Загрузка страницы…');
+assert.equal(tabs.children[1].children[0].getAttribute('aria-label'), 'Rust загружается');
+assert.equal(tabs.children[1].children[0].children[0].className, 'dot loading');
+assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible');
+window.renderSearch({active: 0, tabs: [
+  {label: 'Новая вкладка', url: 'search:start', loading: false},
+  {label: 'Rust', url: 'https://rust-lang.org/', loading: false},
+]});
+assert.equal(elements.get('activity').textContent, '');
 
 const first = tabs.children[0].children[0];
 first.focus();

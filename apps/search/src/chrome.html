@@ -2,33 +2,40 @@
 <html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <style>
-  :root { color-scheme: dark; font: 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  :root { color-scheme: dark; font: 14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
   * { box-sizing: border-box; }
-  body { margin: 0; background: #273034; color: #edf1f1; overflow: hidden; }
-  .bar { position: relative; height: 76px; display: flex; align-items: center; gap: 8px; padding: 12px 16px 12px 78px; border-bottom: 1px solid #4b585b; background: linear-gradient(110deg,#303a3d,#252d31); }
-  .brand { font-weight: 660; letter-spacing: -.04em; font-size: 16px; margin-right: 8px; color: #f2f5f4; }
-  .tabs { display: flex; min-width: 0; flex: 1; gap: 5px; overflow-x: auto; scrollbar-width: none; }
+  body { margin: 0; background: #262626; color: #f2f2f2; overflow: hidden; }
+  .bar { position: relative; height: 64px; display: flex; align-items: center; gap: 9px; padding: 7px 16px 7px 78px; border-bottom: 1px solid #ffffff12; background: #2c2c2d; }
+  .navigation { display: flex; flex: none; gap: 2px; margin-right: 6px; }
+  .tabs { display: flex; min-width: 0; flex: 1; gap: 0; overflow-x: auto; scrollbar-width: none; border-radius: 19px; background: #ffffff0e; }
   .tabs::-webkit-scrollbar { display: none; }
-  .tab { flex: 0 0 146px; min-width: 0; height: 43px; border-radius: 14px; background: #ffffff0c; color: #c8d2d2; border: 1px solid transparent; display: flex; align-items: center; padding: 0 5px 0 10px; }
-  .tab.active { background: #ffffff20; border-color: #ffffff35; color: white; box-shadow: inset 0 1px #ffffff18; }
-  .tab .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: #9cb9b5; }
+  .tab { position: relative; flex: 1 0 125px; max-width: 230px; min-width: 0; height: 41px; color: #c5c5c7; display: flex; align-items: center; padding: 0 5px 0 13px; }
+  .tab + .tab::before { content: ''; position: absolute; left: 0; top: 11px; height: 19px; width: 1px; background: #ffffff1c; }
+  .tab.active { background: #ffffff13; color: #f7f7f7; border-radius: 17px; }
+  .tab.active::before,.tab.active + .tab::before { opacity: 0; }
+  .tab .dot { width: 8px; height: 8px; flex: none; border-radius: 3px; background: #98999d; }
+  .tab .dot.loading { border: 1px solid #f0f0f0; border-top-color: transparent; border-radius: 50%; background: transparent; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .tab .dot.loading { animation: none; border-color: #f0f0f0; } }
   .tab .select { min-width: 0; flex: 1; height: 100%; border: 0; background: none; color: inherit; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 0; font: inherit; }
   .tab .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; text-align: left; }
-  .tab .close { flex: none; width: 27px; height: 27px; border: 0; border-radius: 8px; background: none; color: inherit; opacity: .72; font-size: 17px; cursor: pointer; }
-  .tab .close:hover { background: #ffffff25; opacity: 1; }
-  .tool { flex: none; height: 36px; min-width: 36px; border: 1px solid #ffffff20; border-radius: 12px; color: #e1e9e8; background: #ffffff10; cursor: pointer; font-size: 18px; }
-  .tool:hover,.tab:hover { background: #ffffff25; }
-  .address { width: clamp(180px,27vw,390px); height: 42px; border-radius: 15px; border: 1px solid #ffffff3b; background: #10181b80; color: #edf1f1; padding: 0 15px; outline: none; }
-  .address:focus { border-color: #a3c2be; box-shadow: 0 0 0 2px #a3c2be28; }
+  .tab .close { flex: none; width: 25px; height: 25px; border: 0; border-radius: 50%; background: none; color: inherit; opacity: .6; font-size: 17px; cursor: pointer; }
+  .tab .close:hover { background: #ffffff22; opacity: 1; }
+  .tool { flex: none; height: 38px; min-width: 32px; border: 0; border-radius: 12px; color: #c9c9cb; background: transparent; cursor: pointer; font-size: 21px; }
+  .tool:hover,.tab:hover { background: #ffffff17; }
+  .address { width: clamp(190px,29vw,410px); height: 42px; border-radius: 23px; border: 1px solid #ffffff38; background: #ffffff13; color: #f2f2f2; padding: 0 18px; outline: none; box-shadow: inset 0 1px #ffffff14; }
+  .address::placeholder { color: #a8a8aa; }
+  .address:focus { border-color: #bcbec2; box-shadow: 0 0 0 3px #ffffff18; }
   .address[aria-invalid="true"] { border-color: #d4a8a3; }
   .notice { position: absolute; bottom: 1px; right: 16px; max-width: min(390px,45vw); color: #efc2bc; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  :focus-visible { outline: 2px solid #b7d4d0; outline-offset: 2px; }
-  @media(max-width:820px) { .bar { padding-left: 20px; } .brand { display:none; } .tab { flex-basis: 110px; } .address { width: 180px; } }
+  .activity { position: absolute; bottom: 1px; left: 90px; color: #c4c4c6; font-size: 10px; }
+  :focus-visible { outline: 2px solid #d0d0d2; outline-offset: 2px; }
+  @media(max-width:820px) { .bar { padding-left: 16px; gap: 5px; } .navigation { margin-right: 1px; } .tab { flex-basis: 110px; } .address { width: 190px; } .activity { left:16px; } }
 </style>
-<div class="bar"><span class="brand">Search</span><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><input class="address" id="address" aria-label="Адрес" placeholder="Rust, Wikipedia, Excalidraw" aria-describedby="notice"><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <script>
   'use strict';
-  const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice');
+  const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice'), activity = document.getElementById('activity');
   const send = value => window.ipc.postMessage(JSON.stringify(value));
   document.getElementById('add').onclick = () => send({type:'new'});
   document.getElementById('back').onclick = () => send({type:'back'});
@@ -60,15 +67,17 @@
     tabs.replaceChildren();
     state.tabs.forEach((tab,index) => {
       const item = document.createElement('div'); item.className='tab'+(index===state.active?' active':'');
-      const button = document.createElement('button'); button.className='select'; button.type='button'; button.dataset.action='select'; button.dataset.index=index; button.setAttribute('role','tab'); button.setAttribute('aria-selected',index===state.active?'true':'false'); button.tabIndex=index===state.active?0:-1;
-      const dot=document.createElement('span'); dot.className='dot';
+      const button = document.createElement('button'); button.className='select'; button.type='button'; button.dataset.action='select'; button.dataset.index=index; button.setAttribute('role','tab'); button.setAttribute('aria-selected',index===state.active?'true':'false'); button.setAttribute('aria-label',tab.loading?tab.label+' загружается':tab.label); button.tabIndex=index===state.active?0:-1;
+      const dot=document.createElement('span'); dot.className='dot'+(tab.loading?' loading':'');
       const name=document.createElement('span'); name.className='name'; name.textContent=tab.label;
       const close=document.createElement('button'); close.className='close'; close.type='button'; close.dataset.action='close'; close.dataset.index=index; close.textContent='×'; close.setAttribute('aria-label','Закрыть вкладку '+tab.label);
       close.onclick=()=>send({type:'close',index});
       button.onclick=()=>send({type:'select',index}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
+    if(activeChanged) tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
     if(document.activeElement!==address || activeChanged) address.value=state.attempted_address ?? state.tabs[state.active]?.url ?? '';
     notice.textContent=state.notice ?? '';
+    activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
     address.setAttribute('aria-invalid',state.notice?'true':'false');
     if(focusedIndex!==undefined && state.tabs.length) {
       const index=Math.min(Number(focusedIndex),state.tabs.length-1);
