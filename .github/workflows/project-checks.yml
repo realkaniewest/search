@@ -301,3 +301,11 @@ jobs:
           } finally {
             Remove-Item $stdout, $stderr -ErrorAction SilentlyContinue
           }
+      - name: Save Windows runtime probe for manual verification
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: search-windows-runtime-probe
+          path: prototypes/wry-windows-runtime/target/debug/search-wry-windows-runtime.exe
+          if-no-files-found: error
+          retention-days: 7
