@@ -342,7 +342,6 @@ fn create_content(
     let popup_counts = counts.clone();
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
-    let download_proxy = proxy.clone();
     let second_fixture =
         navigation_counts.fixture_mode && id == 2 && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
@@ -358,9 +357,6 @@ fn create_content(
             download_counts
                 .blocked_download
                 .fetch_add(1, Ordering::SeqCst);
-            if second_fixture {
-                let _ = download_proxy.send_event(AppEvent::SecurityProgress);
-            }
             false
         })
         .with_new_window_req_handler(move |_, _| {
@@ -671,7 +667,8 @@ fn main() {
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
                     if checkpoint && tabs.len() == 1 && active == 0 {
                         let _ = content_proxy.send_event(AppEvent::Command(Command::New));
-                    } else if nav >= 2
+                    } else if !checkpoint
+                        && nav >= 2
                         && download >= 2
                         && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
                     {
