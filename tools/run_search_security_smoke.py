@@ -105,8 +105,11 @@ def main():
         for attempt in (1, 2):
             try:
                 run = subprocess.run(command, capture_output=True, text=True, timeout=50, check=False)
-            except subprocess.TimeoutExpired:
-                print("FAIL: Search security smoke timed out", file=sys.stderr)
+            except subprocess.TimeoutExpired as error:
+                for stream in (error.stdout, error.stderr):
+                    if stream:
+                        print(stream.decode(errors="replace"), file=sys.stderr, end="")
+                print(f"FAIL: Search security smoke timed out; reports={Handler.results!r}", file=sys.stderr)
                 return 1
             print(run.stdout, end="")
             print(run.stderr, end="", file=sys.stderr)
