@@ -360,11 +360,20 @@ fn create_content(
         builder.with_url(initial_url)
     };
     #[cfg(target_os = "windows")]
-    let builder = builder.with_additional_browser_args("");
+    let builder = builder
+        .with_additional_browser_args("")
+        .with_profile_name(format!("SearchTemporaryTab{id}"));
     #[cfg(target_os = "linux")]
     return build_view(builder, window, fixed).map(|view| (view, local_navigation));
     #[cfg(not(target_os = "linux"))]
     build_view(builder, window).map(|view| (view, local_navigation))
+}
+
+fn send_security_checkpoint(proxy: &tao::event_loop::EventLoopProxy<AppEvent>, round: u8) {
+    eprintln!("SECURITY: dispatch checkpoint {round}");
+    if proxy.send_event(AppEvent::SecurityCheck).is_err() {
+        eprintln!("SECURITY: event loop closed before checkpoint {round}");
+    }
 }
 
 fn main() {
@@ -404,16 +413,20 @@ fn main() {
     };
     let (chrome_rect, content_rect) = bounds(&window);
     let proxy = event_loop.create_proxy();
+    if mode == Mode::SecuritySmoke {
+        for (round, seconds) in [(1, 12), (2, 24)] {
+            let timer_proxy = proxy.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_secs(seconds));
+                send_security_checkpoint(&timer_proxy, round);
+            });
+        }
+    }
     if mode != Mode::Normal {
         let timer_proxy = proxy.clone();
         thread::spawn(move || {
-            if mode == Mode::SecuritySmoke {
-                thread::sleep(Duration::from_secs(12));
-                let _ = timer_proxy.send_event(AppEvent::SecurityCheck);
-                thread::sleep(Duration::from_secs(13));
-            } else {
-                thread::sleep(Duration::from_secs(25));
-            }
+            let seconds = if mode == Mode::SecuritySmoke { 34 } else { 25 };
+            thread::sleep(Duration::from_secs(seconds));
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
         });
     }
@@ -572,15 +585,22 @@ fn main() {
                 // WebKitGTK can deny window.open before Wry's popup callback.
                 // The fixture separately checks that no popup was returned.
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
-                    println!("PASS: Search security boundary checks");
-                    *control_flow = ControlFlow::ExitWithCode(0);
+                    if tabs.len() == 1 && active == 0 {
+                        let _ = content_proxy.send_event(AppEvent::Command(Command::New));
+                    } else if tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title) {
+                        println!("PASS: Search security boundary checks");
+                        *control_flow = ControlFlow::ExitWithCode(0);
+                    } else {
+                        eprintln!("FAIL: Search second fixture tab did not load");
+                        *control_flow = ControlFlow::ExitWithCode(1);
+                    }
                 } else {
                     eprintln!("FAIL: Search security boundary checks incomplete");
                     *control_flow = ControlFlow::ExitWithCode(1);
                 }
             }
             Event::UserEvent(AppEvent::TimedOut) => {
-                eprintln!("FAIL: Search first window did not load in 25 seconds");
+                eprintln!("FAIL: Search first window did not load before the test deadline");
                 *control_flow = ControlFlow::ExitWithCode(1);
             }
             Event::UserEvent(AppEvent::Command(command)) => {
@@ -589,6 +609,11 @@ fn main() {
                 match command {
                     Command::New if tabs.len() < MAX_TABS => {
                         let (_, rect) = bounds(&window);
+                        let page = if mode == Mode::SecuritySmoke {
+                            Page::LocalFixture
+                        } else {
+                            Page::Start
+                        };
                         #[cfg(target_os = "linux")]
                         let new_view = create_content(
                             &window,
@@ -596,7 +621,7 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            (Page::Start, Page::Start.url()),
+                            (page, page.url()),
                             rect,
                         );
                         #[cfg(not(target_os = "linux"))]
@@ -605,18 +630,21 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            (Page::Start, Page::Start.url()),
+                            (page, page.url()),
                             rect,
                         );
+                        if mode == Mode::SecuritySmoke {
+                            eprintln!("SECURITY: second WebView created={}", new_view.is_ok());
+                        }
                         if let Ok((view, local_navigation)) = new_view {
                             let _ = tabs[active].view.set_visible(false);
                             tabs.push(Tab {
                                 id: next_id,
-                                page: Page::Start,
-                                display_url: Page::Start.url().to_owned(),
-                                title: Page::Start.label().to_owned(),
+                                page,
+                                display_url: page.url().to_owned(),
+                                title: page.label().to_owned(),
                                 loading: false,
-                                has_start_entry: true,
+                                has_start_entry: matches!(page, Page::Start),
                                 pending_start_return: false,
                                 start_forward_url: None,
                                 view,
@@ -624,6 +652,9 @@ fn main() {
                             });
                             active = tabs.len() - 1;
                             next_id += 1;
+                            if mode == Mode::SecuritySmoke {
+                                eprintln!("SECURITY: second WebView active");
+                            }
                         }
                     }
                     Command::New => {
