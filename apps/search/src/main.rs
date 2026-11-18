@@ -124,9 +124,11 @@ fn allowed_url(raw: &str) -> Option<Page> {
     }
     match (url.scheme(), url.host_str(), url.port_or_known_default()) {
         ("https", Some("rust-lang.org" | "www.rust-lang.org"), Some(443)) => Some(Page::Rust),
-        ("https", Some("www.wikipedia.org" | "en.wikipedia.org"), Some(443)) => {
-            Some(Page::Wikipedia)
-        }
+        (
+            "https",
+            Some("www.wikipedia.org" | "en.wikipedia.org" | "ru.wikipedia.org"),
+            Some(443),
+        ) => Some(Page::Wikipedia),
         ("https", Some("excalidraw.com"), Some(443)) => Some(Page::Excalidraw),
         ("http", Some("127.0.0.1"), Some(LOCAL_ORIGIN_PORT))
             if url.port() == Some(LOCAL_ORIGIN_PORT) =>
@@ -717,6 +719,7 @@ mod tests {
             "https://www.rust-lang.org/",
             "https://www.wikipedia.org/wiki/Rust",
             "https://en.wikipedia.org/wiki/Rust_(programming_language)",
+            "https://ru.wikipedia.org/wiki/Special:Search?search=Rust",
             "https://excalidraw.com/#room=x",
             "http://127.0.0.1:43127/test",
         ] {
@@ -724,6 +727,8 @@ mod tests {
         }
         for bad in [
             "https://rust-lang.org.evil.test/",
+            "https://ru.wikipedia.org.evil.test/",
+            "https://de.wikipedia.org/",
             "https://user:pass@rust-lang.org/",
             "http://rust-lang.org/",
             "https://rust-lang.org:8443/",
