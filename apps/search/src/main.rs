@@ -70,10 +70,10 @@ impl SecurityCounts {
 enum Command {
     New,
     Select {
-        index: usize,
+        id: u64,
     },
     Close {
-        index: usize,
+        id: u64,
     },
     Open {
         value: String,
@@ -732,15 +732,21 @@ fn main() {
                     Command::New => {
                         notice = Some("Открыто 12 вкладок. Закрой одну, чтобы открыть новую.");
                     }
-                    Command::Select { index } if index < tabs.len() && index != active => {
-                        if !Rc::ptr_eq(&tabs[active].view, &tabs[index].view) {
-                            let _ = tabs[active].view.set_visible(false);
-                            let _ = tabs[index].view.set_visible(true);
+                    Command::Select { id } => {
+                        if let Some(index) = tabs.iter().position(|tab| tab.id == id)
+                            && index != active
+                        {
+                            if !Rc::ptr_eq(&tabs[active].view, &tabs[index].view) {
+                                let _ = tabs[active].view.set_visible(false);
+                                let _ = tabs[index].view.set_visible(true);
+                            }
+                            active = index;
                         }
-                        active = index;
                     }
-                    Command::Close { index } if index < tabs.len() => {
-                        if tabs.len() > 1 {
+                    Command::Close { id } => {
+                        if tabs.len() > 1
+                            && let Some(index) = tabs.iter().position(|tab| tab.id == id)
+                        {
                             let removed = tabs.remove(index);
                             if index < active {
                                 active -= 1;
@@ -956,7 +962,12 @@ mod tests {
             Some(Command::New)
         ));
         assert!(parse_command(r#"{"type":"open","value":"x","extra":1}"#).is_none());
-        assert!(parse_command(r#"{"type":"select","index":-1}"#).is_none());
+        assert!(parse_command(r#"{"type":"select","id":-1}"#).is_none());
+        assert!(parse_command(r#"{"type":"close","index":0}"#).is_none());
+        assert!(matches!(
+            parse_command(r#"{"type":"close","id":42}"#),
+            Some(Command::Close { id: 42 })
+        ));
         assert!(parse_command(&"x".repeat(2049)).is_none());
         assert!(page_from_input("https://not-allowed.example/").is_none());
     }
