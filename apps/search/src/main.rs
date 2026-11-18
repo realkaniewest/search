@@ -69,9 +69,17 @@ impl SecurityCounts {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Command {
     New,
-    Select { index: usize },
-    Close { index: usize },
-    Open { value: String },
+    Select {
+        index: usize,
+    },
+    Close {
+        index: usize,
+    },
+    Open {
+        value: String,
+    },
+    #[serde(rename = "cancel-address")]
+    CancelAddress,
     Back,
     Forward,
     Reload,
@@ -790,6 +798,7 @@ fn main() {
                             attempted_address = Some(value);
                         }
                     }
+                    Command::CancelAddress => {}
                     Command::Back => {
                         let tab = &mut tabs[active];
                         if tab.start_forward_url.is_none() {
