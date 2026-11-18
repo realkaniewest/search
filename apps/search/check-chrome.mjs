@@ -66,7 +66,7 @@ const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
   createElement: tag => new Element(tag),
-  addEventListener() {},
+  addEventListener(type, callback) { this[type] = callback; },
 };
 const messages = [];
 const window = { ipc: { postMessage: message => messages.push(JSON.parse(message)) } };
@@ -86,6 +86,19 @@ window.renderSearch({active: 0, tabs: [
   {id: 11, label: 'Rust', url: 'https://rust-lang.org/'},
 ]});
 assert.equal(tabs.children.length, 2);
+const shortcut = options => document.keydown({preventDefault() {}, ...options});
+shortcut({ctrlKey: true, key: 'Tab'});
+assert.deepEqual(messages.pop(), {type: 'select', id: 11});
+shortcut({ctrlKey: true, shiftKey: true, key: 'Tab'});
+assert.deepEqual(messages.pop(), {type: 'select', id: 11}, 'previous wraps to the last tab');
+shortcut({metaKey: true, key: '9'});
+assert.deepEqual(messages.pop(), {type: 'select', id: 11});
+shortcut({ctrlKey: true, key: '2'});
+assert.deepEqual(messages.pop(), {type: 'select', id: 11});
+shortcut({ctrlKey: true, key: '8'});
+shortcut({ctrlKey: true, key: 'Tab', isComposing: true});
+assert.equal(messages.length, 0);
+
 assert.equal(elements.get('back').disabled, true, 'new tab has no back entry');
 assert.equal(elements.get('forward').disabled, true, 'new tab has no forward entry');
 window.renderSearch({...window.searchState, can_back: true, can_forward: true});
