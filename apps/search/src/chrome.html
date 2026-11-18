@@ -183,6 +183,10 @@
     if (target) {
       e.preventDefault();
       if (target.id !== window.searchState.tabs[window.searchState.active]?.id) {
+        if (document.activeElement?.getAttribute('role') === 'tab') {
+          const index = window.searchState.tabs.indexOf(target);
+          tabs.querySelector(`[role="tab"][data-index="${index}"]`)?.focus({preventScroll:true});
+        }
         send({type:'select',id:target.id});
       }
       return;

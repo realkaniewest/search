@@ -87,8 +87,11 @@ window.renderSearch({active: 0, tabs: [
 ]});
 assert.equal(tabs.children.length, 2);
 const shortcut = options => document.keydown({preventDefault() {}, ...options});
+tabs.children[0].children[0].focus();
 shortcut({ctrlKey: true, key: 'Tab'});
 assert.deepEqual(messages.pop(), {type: 'select', id: 11});
+assert.equal(document.activeElement, tabs.children[1].children[0], 'focus follows the shortcut target');
+document.activeElement.blur();
 shortcut({ctrlKey: true, shiftKey: true, key: 'Tab'});
 assert.deepEqual(messages.pop(), {type: 'select', id: 11}, 'previous wraps to the last tab');
 shortcut({metaKey: true, key: '9'});
