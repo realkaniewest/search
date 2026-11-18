@@ -6,6 +6,12 @@ class Element {
   constructor(tagName = 'div') {
     this.tagName = tagName;
     this.children = [];
+    this.className = '';
+    this.classList = {
+      add: value => { this.className += ' ' + value; },
+      remove: value => { this.className = this.className.split(' ').filter(name => name !== value).join(' '); },
+    };
+    this.selectionStart = this.selectionEnd = 0;
     this.dataset = {};
     this.attributes = new Map();
     this.listeners = new Map();
@@ -22,7 +28,8 @@ class Element {
   getAttribute(key) { return this.attributes.get(key); }
   addEventListener(key, callback) { this.listeners.set(key, callback); }
   focus() { document.activeElement = this; }
-  blur() { document.activeElement = null; }
+  blur() { document.activeElement = null; this.listeners.get('blur')?.(); }
+  setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
   select() {}
   scrollBy({left}) {
     this.scrollLeft = Math.max(0, Math.min(this.scrollLeft + left, this.scrollWidth - this.clientWidth));
@@ -90,6 +97,15 @@ assert.equal(tabs.children[0].children[1].tagName, 'button', 'close is a separat
 assert.equal(tabs.children[0].children[0].tabIndex, 0);
 assert.equal(tabs.children[1].children[0].tabIndex, -1);
 assert.equal(elements.get('activity').textContent, '');
+const inlineAddress = elements.get('address');
+assert.equal(tabs.children[0].children[2], inlineAddress, 'address is inside the selected tab');
+assert.equal(inlineAddress.hidden, true);
+tabs.children[0].children[0].dispatch('click');
+assert.equal(document.activeElement, inlineAddress);
+assert.equal(inlineAddress.hidden, false);
+inlineAddress.blur();
+assert.equal(inlineAddress.hidden, true);
+
 
 window.renderSearch({active: 1, tabs: [
   {id: 10, label: 'Новая вкладка', url: 'search:start', loading: false},
