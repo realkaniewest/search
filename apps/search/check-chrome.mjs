@@ -11,6 +11,7 @@ class Element {
     this.listeners = new Map();
     this.value = '';
   }
+  set innerHTML(_value) { assert.fail('chrome must build DOM nodes without HTML injection'); }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = [...children]; }
   setAttribute(key, value) { this.attributes.set(key, String(value)); }
@@ -19,6 +20,7 @@ class Element {
   focus() { document.activeElement = this; }
   blur() { document.activeElement = null; }
   select() {}
+  scrollIntoView(options) { this.scrolledWith = options; }
   closest(selector) { return selector === '[role="tab"]' && this.getAttribute('role') === 'tab' ? this : null; }
   querySelector(selector) {
     const action = selector.match(/data-action="([^"]+)"/)?.[1];
@@ -44,7 +46,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'add', 'back', 'forward'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -64,10 +66,32 @@ window.renderSearch({active: 0, tabs: [
   {label: 'Rust', url: 'https://rust-lang.org/'},
 ]});
 assert.equal(tabs.children.length, 2);
+assert.equal(elements.get('reload').disabled, true, 'start page has no reload history entry');
 assert.equal(tabs.children[0].children[0].getAttribute('role'), 'tab');
 assert.equal(tabs.children[0].children[1].tagName, 'button', 'close is a separate keyboard button');
 assert.equal(tabs.children[0].children[0].tabIndex, 0);
 assert.equal(tabs.children[1].children[0].tabIndex, -1);
+assert.equal(elements.get('activity').textContent, '');
+
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start', loading: false},
+  {label: 'Rust', url: 'https://rust-lang.org/', loading: true},
+]});
+assert.equal(elements.get('activity').textContent, 'Загрузка страницы…');
+assert.equal(elements.get('reload').disabled, false);
+assert.equal(tabs.children[1].children[0].getAttribute('aria-label'), 'Rust загружается');
+assert.equal(tabs.children[1].children[0].children[0].className, 'dot loading');
+assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible');
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start', loading: false},
+  {label: 'Rust Programming Language', url: 'https://rust-lang.org/', loading: false},
+]});
+assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible after title update');
+window.renderSearch({active: 0, tabs: [
+  {label: 'Новая вкладка', url: 'search:start', loading: false},
+  {label: 'Rust', url: 'https://rust-lang.org/', loading: false},
+]});
+assert.equal(elements.get('activity').textContent, '');
 
 const first = tabs.children[0].children[0];
 first.focus();
@@ -90,6 +114,9 @@ assert.deepEqual(messages.pop(), {type: 'close', index: 0});
 tabs.children[1].children[1].dispatch('click');
 assert.deepEqual(messages.pop(), {type: 'close', index: 1});
 
+elements.get('reload').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'reload'});
+
 const address = elements.get('address');
 address.focus();
 address.value = 'https://www.wikipedia.org/wiki/Rust';
@@ -102,7 +129,7 @@ window.renderSearch({active: 0, tabs: [
   {label: 'Новая вкладка', url: 'search:start'},
   {label: 'Rust', url: 'https://rust-lang.org/learn'},
 ]});
-assert.equal(address.value, 'search:start', 'switching tabs must replace the old typed URL');
+assert.equal(address.value, '', 'switching tabs must replace the old typed URL');
 address.blur();
 window.renderSearch({active: 1, tabs: [
   {label: 'Новая вкладка', url: 'search:start'},
@@ -117,6 +144,11 @@ window.renderSearch({active: 1, tabs: [
 assert.equal(address.value, 'https://blocked.invalid/', 'rejected address stays editable');
 assert.equal(address.getAttribute('aria-invalid'), 'true');
 assert.equal(elements.get('notice').textContent, 'Пока доступны только выбранные сайты.');
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start'},
+  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+], notice: 'Открыто 12 вкладок.'});
+assert.equal(address.getAttribute('aria-invalid'), 'false', 'other notices do not mark the address invalid');
 address.dispatch('input');
 assert.equal(elements.get('notice').textContent, '');
 assert.equal(address.getAttribute('aria-invalid'), 'false');
@@ -129,5 +161,33 @@ assert.ok(elements.get('notice').textContent.includes('слишком длинн
 address.value = '\\'.repeat(1024);
 address.dispatch('keydown', {key: 'Enter'});
 assert.equal(messages.length, messagesBeforeLongAddress, 'escaped JSON over limit never reaches IPC');
+
+const stableTab = tabs.children[1].children[0];
+stableTab.focus();
+window.renderSearch({
+  ...window.searchState,
+  notice: 'Открыто 12 вкладок.',
+});
+assert.equal(tabs.children[1].children[0], stableTab, 'notice does not recreate tab buttons');
+assert.equal(document.activeElement, stableTab, 'notice preserves keyboard focus');
+
+const untrustedLabel = '<img src=x> & test';
+window.renderSearch({
+  ...window.searchState,
+  tabs: window.searchState.tabs.map((tab, i) => i === 1 ? {...tab, label: untrustedLabel} : tab),
+});
+const titleNode = tabs.children[1].children[0].children[1];
+assert.equal(titleNode.textContent, untrustedLabel, 'site title stays text');
+assert.equal(titleNode.children.length, 0, 'site title does not create HTML nodes');
+
+address.focus();
+address.value = 'typing in previous tab';
+window.renderSearch({
+  ...window.searchState,
+  notice: null,
+  tabs: window.searchState.tabs.map((tab, i) => i === window.searchState.active
+    ? {...tab, id: 42, url: 'https://rust-lang.org/learn'} : tab),
+});
+assert.equal(address.value, 'https://rust-lang.org/learn', 'replacement tab clears previous address draft');
 
 console.log('Search chrome keyboard and tab controls passed');
