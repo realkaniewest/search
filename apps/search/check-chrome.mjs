@@ -11,6 +11,7 @@ class Element {
     this.listeners = new Map();
     this.value = '';
   }
+  set innerHTML(_value) { assert.fail('chrome must build DOM nodes without HTML injection'); }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = [...children]; }
   setAttribute(key, value) { this.attributes.set(key, String(value)); }
@@ -160,5 +161,33 @@ assert.ok(elements.get('notice').textContent.includes('слишком длинн
 address.value = '\\'.repeat(1024);
 address.dispatch('keydown', {key: 'Enter'});
 assert.equal(messages.length, messagesBeforeLongAddress, 'escaped JSON over limit never reaches IPC');
+
+const stableTab = tabs.children[1].children[0];
+stableTab.focus();
+window.renderSearch({
+  ...window.searchState,
+  notice: 'Открыто 12 вкладок.',
+});
+assert.equal(tabs.children[1].children[0], stableTab, 'notice does not recreate tab buttons');
+assert.equal(document.activeElement, stableTab, 'notice preserves keyboard focus');
+
+const untrustedLabel = '<img src=x> & test';
+window.renderSearch({
+  ...window.searchState,
+  tabs: window.searchState.tabs.map((tab, i) => i === 1 ? {...tab, label: untrustedLabel} : tab),
+});
+const titleNode = tabs.children[1].children[0].children[1];
+assert.equal(titleNode.textContent, untrustedLabel, 'site title stays text');
+assert.equal(titleNode.children.length, 0, 'site title does not create HTML nodes');
+
+address.focus();
+address.value = 'typing in previous tab';
+window.renderSearch({
+  ...window.searchState,
+  notice: null,
+  tabs: window.searchState.tabs.map((tab, i) => i === window.searchState.active
+    ? {...tab, id: 42, url: 'https://rust-lang.org/learn'} : tab),
+});
+assert.equal(address.value, 'https://rust-lang.org/learn', 'replacement tab clears previous address draft');
 
 console.log('Search chrome keyboard and tab controls passed');

@@ -87,13 +87,10 @@
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') { e.preventDefault(); send({type:'close',index:window.searchState.active}); }
   });
   window.searchState = {active:0,tabs:[]};
-  window.renderSearch = state => {
+  function renderTabs(state, activeChanged) {
     const focused = document.activeElement;
     const focusedIndex = focused?.dataset?.index;
     const focusedAction = focused?.dataset?.action;
-    const activeChanged = state.active !== window.searchState.active;
-    window.searchState = state;
-    document.getElementById('reload').disabled = !state.tabs[state.active] || state.tabs[state.active].url === 'search:start';
     tabs.replaceChildren();
     state.tabs.forEach((tab,index) => {
       const item = document.createElement('div'); item.className='tab'+(index===state.active?' active':'')+(index===state.active && activeChanged?' just-selected':'');
@@ -105,6 +102,25 @@
       button.onclick=()=>send({type:'select',index}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
     tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
+    if(focusedIndex!==undefined && state.tabs.length) {
+      const index=Math.min(Number(focusedIndex),state.tabs.length-1);
+      tabs.querySelector(`[data-action="${focusedAction}"][data-index="${index}"]`)?.focus();
+    }
+  }
+  window.renderSearch = state => {
+    const previous = window.searchState;
+    const activeChanged = state.active !== previous.active
+      || state.tabs[state.active]?.id !== previous.tabs[previous.active]?.id;
+    const tabsChanged = activeChanged || state.tabs.length !== previous.tabs.length
+      || state.tabs.some((tab, index) => {
+        const before = previous.tabs[index];
+        return tab.id !== before.id || tab.label !== before.label || tab.loading !== before.loading;
+      });
+    window.searchState = state;
+    if (tabsChanged) renderTabs(state, activeChanged);
+
+    const activeTab = state.tabs[state.active];
+    document.getElementById('reload').disabled = !activeTab || activeTab.url === 'search:start';
     if(document.activeElement!==address || activeChanged) {
       const url = state.tabs[state.active]?.url;
       address.value = state.attempted_address ?? (url === 'search:start' ? '' : url ?? '');
@@ -112,10 +128,6 @@
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
     address.setAttribute('aria-invalid',state.attempted_address != null?'true':'false');
-    if(focusedIndex!==undefined && state.tabs.length) {
-      const index=Math.min(Number(focusedIndex),state.tabs.length-1);
-      tabs.querySelector(`[data-action="${focusedAction}"][data-index="${index}"]`)?.focus();
-    }
   };
   tabs.addEventListener('keydown', e => {
     const tab=e.target.closest('[role="tab"]');
