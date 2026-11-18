@@ -8,7 +8,17 @@
   .bar { position: relative; height: 50px; display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 78px; border-bottom: 1px solid #ffffff12; background: linear-gradient(112deg, #292c32d9, #202126e6); }
   @media (prefers-reduced-transparency: reduce) { .bar { background: #272930; } }
   .navigation { display: flex; flex: none; gap: 2px; margin-right: 6px; }
-  .tab-strip { display: flex; flex: 1; min-width: 0; align-items: center; }
+  .tab-strip {
+    --strip-width: 240px;
+    display: flex;
+    flex: 0 1 var(--strip-width);
+    min-width: 0;
+    align-items: center;
+    margin-inline: auto;
+  }
+  .tab-strip:has(.tab:nth-child(2)) { --strip-width: 480px; }
+  .tab-strip:has(.tab:nth-child(3)) { --strip-width: 640px; }
+  .tab-strip:has(.tab:nth-child(4)) { --strip-width: 820px; }
   .tab-scroll { min-width: 24px; padding: 0; font-size: 17px; }
   .tab-scroll[hidden] { display: none; }
   .tabs { display: flex; min-width: 0; flex: 1; gap: 0; overflow-x: auto; scrollbar-width: none; border-radius: 19px; background: #ffffff0e; }
@@ -62,14 +72,19 @@
     }
   }
   .bar { gap: 8px; background: linear-gradient(115deg, #303238c4, #222328d9); }
-  .tabs { gap: 2px; border-radius: 12px; background: #ffffff06; }
-  .tab { flex: 1 1 132px; min-width: 25px; max-width: none; padding: 0; container-type: inline-size; }
-  .tab.active { flex: 2 0 145px; max-width: 330px; border-radius: 11px; }
-  .tab .select { justify-content: center; padding: 0 9px; }
+  .tabs { gap: 0; border-radius: 16px; background: #ffffff0c; }
+  .tab { flex: 1 1 0; min-width: 29px; max-width: none; padding: 0; container-type: inline-size; }
+  .tab.active { flex: 1 1 0; min-width: 125px; border-radius: 15px; border: 1px solid #ffffff22; }
+  .tab .select { justify-content: center; padding: 0 27px; gap: 6px; }
+  .tab .name { flex: 0 1 auto; text-align: center; }
+  .tab.active .select { cursor: text; }
+  .tab .hint { display: none; color: #bdbec4; }
+  .tab.active .select:has(.hint) .dot { display: none; }
+  .tab.active .hint { display: inline; }
+  .tab.active .select:has(.hint) .name { display: none; }
   .tab .dot { width: 10px; height: 10px; border-radius: 50%; }
   .tab .close { position: absolute; right: 3px; top: 5px; width: 22px; height: 22px; padding: 0; opacity: 0; }
   .tab:hover .close,.tab:focus-within .close { opacity: 1; }
-  .tab:hover .select,.tab:focus-within .select { padding-right: 25px; }
   .tab .close:hover { background: #ffffff20; }
   .tab .close:disabled { display: none; }
   .tab .address { position: absolute; inset: 1px 27px 1px 1px; width: auto; height: auto; border-radius: 10px; padding: 0 9px; }
@@ -78,7 +93,7 @@
   .tab.editing .select { visibility: hidden; }
   @container (max-width: 64px) {
     .tab:not(.active) .name { display: none; }
-    .tab:not(.active):hover .select,.tab:not(.active):focus-within .select { padding: 0; }
+    .tab:not(.active) .select { padding: 0; }
     .tab:not(.active) .close:not(:focus-visible) { opacity: 0; pointer-events: none; }
   }
   @media (prefers-reduced-transparency: reduce) { .bar { background: #292b31; } }
@@ -187,7 +202,15 @@
           close.onclick();
         }
       });
-      button.append(dot,name); item.append(button,close);
+      button.append(dot,name);
+      if (tab.url === 'search:start') {
+        const hint = document.createElement('span');
+        hint.className = 'hint';
+        hint.textContent = 'Адрес или сайт';
+        hint.setAttribute('aria-hidden', 'true');
+        button.append(hint);
+      }
+      item.append(button,close);
       if (index===state.active) {
         editorTab = item;
         item.append(address);
@@ -223,7 +246,7 @@
     const tabsChanged = activeChanged || state.active !== previous.active || state.tabs.length !== previous.tabs.length
       || state.tabs.some((tab, index) => {
         const before = previous.tabs[index];
-        return tab.id !== before.id || tab.label !== before.label || tab.loading !== before.loading;
+        return tab.id !== before.id || tab.label !== before.label || (tab.url === 'search:start') !== (before.url === 'search:start') || tab.loading !== before.loading;
       });
     window.searchState = state;
     if (tabsChanged) renderTabs(state, previous, activeChanged);
