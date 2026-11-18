@@ -591,7 +591,7 @@ fn main() {
                             next_id += 1;
                         }
                     }
-                    Command::Select { index } if index < tabs.len() => {
+                    Command::Select { index } if index < tabs.len() && index != active => {
                         let _ = tabs[active].view.set_visible(false);
                         active = index;
                         let _ = tabs[active].view.set_visible(true);
@@ -603,9 +603,7 @@ fn main() {
                                 active -= 1;
                             } else if index == active {
                                 active = active.min(tabs.len() - 1);
-                            }
-                            for (i, tab) in tabs.iter().enumerate() {
-                                let _ = tab.view.set_visible(i == active);
+                                let _ = tabs[active].view.set_visible(true);
                             }
                         }
                     }
