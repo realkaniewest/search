@@ -38,7 +38,10 @@ fn classify(raw: &str) -> Input<'_> {
                 .all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte))
     });
 
-    if token.contains('@') {
+    let authority = token.split_once("://").map_or(first, |(_, rest)| {
+        rest.split(['/', '?', '#']).next().unwrap_or_default()
+    });
+    if authority.contains('@') {
         return Input::InvalidAddress;
     }
     if !explicit && !bare_host && !has_scheme {
@@ -92,6 +95,11 @@ fn web_addresses_are_normalized_without_deciding_navigation_policy() {
     for (input, output) in [
         (" HTTPS://EXAMPLE.ORG:443/docs ", "https://example.org/docs"),
         ("example.org/docs", "https://example.org/docs"),
+        ("https://example.org/@rust", "https://example.org/@rust"),
+        (
+            "example.org/docs?q=@rust",
+            "https://example.org/docs?q=@rust",
+        ),
         ("пример.рф", "https://xn--e1afmkfd.xn--p1ai/"),
         ("http://localhost:43127/", "http://localhost:43127/"),
         ("localhost:43127", "https://localhost:43127/"),
@@ -114,6 +122,7 @@ fn unsafe_or_malformed_address_forms_do_not_turn_into_search_queries() {
         "https:///example.org",
         "https://a.test:99999/",
         "https://name:secret@example.org/",
+        "https://@example.org/",
         "name@example.org",
         "name@example.org/docs more",
         "example.org/one two",
