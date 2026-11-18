@@ -74,7 +74,7 @@
       close.onclick=()=>send({type:'close',index});
       button.onclick=()=>send({type:'select',index}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
-    if(activeChanged) tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
+    tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
     if(document.activeElement!==address || activeChanged) address.value=state.attempted_address ?? state.tabs[state.active]?.url ?? '';
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';

@@ -79,6 +79,11 @@ assert.equal(elements.get('activity').textContent, 'Загрузка стран�
 assert.equal(tabs.children[1].children[0].getAttribute('aria-label'), 'Rust загружается');
 assert.equal(tabs.children[1].children[0].children[0].className, 'dot loading');
 assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible');
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start', loading: false},
+  {label: 'Rust Programming Language', url: 'https://rust-lang.org/', loading: false},
+]});
+assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible after title update');
 window.renderSearch({active: 0, tabs: [
   {label: 'Новая вкладка', url: 'search:start', loading: false},
   {label: 'Rust', url: 'https://rust-lang.org/', loading: false},
