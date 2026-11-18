@@ -1031,3 +1031,6 @@ mod tests {
         assert_eq!(url, "https://rust-lang.org/learn");
     }
 }
+
+#[cfg(test)]
+mod address_input_probe;
