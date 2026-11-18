@@ -7,7 +7,7 @@ use std::{
     env, process,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
@@ -214,6 +214,7 @@ struct Tab {
     pending_start_return: bool,
     start_forward_url: Option<String>,
     view: WebView,
+    local_navigation: Arc<AtomicBool>,
 }
 
 fn loaded_page(url: &str, pending_start_return: bool) -> Option<(Page, String)> {
@@ -277,15 +278,32 @@ fn sync_chrome(
     }
 }
 
+fn permits_content_navigation(target: &str, local_navigation: &AtomicBool) -> bool {
+    if target == "about:blank" {
+        return true;
+    }
+    match allowed_url(target) {
+        Some(Page::LocalFixture) => local_navigation.load(Ordering::SeqCst),
+        Some(_) => {
+            local_navigation.store(false, Ordering::SeqCst);
+            true
+        }
+        None => false,
+    }
+}
+
 fn create_content(
     window: &Window,
     #[cfg(target_os = "linux")] fixed: &gtk::Fixed,
     id: u64,
     proxy: tao::event_loop::EventLoopProxy<AppEvent>,
     counts: Arc<SecurityCounts>,
-    page: Page,
+    initial: (Page, &str),
     rect: Rect,
-) -> wry::Result<WebView> {
+) -> wry::Result<(WebView, Arc<AtomicBool>)> {
+    let (page, initial_url) = initial;
+    let local_navigation = Arc::new(AtomicBool::new(matches!(page, Page::LocalFixture)));
+    let policy = local_navigation.clone();
     let permission_counts = counts.clone();
     let download_counts = counts.clone();
     let popup_counts = counts.clone();
@@ -310,7 +328,7 @@ fn create_content(
             NewWindowResponse::Deny
         })
         .with_navigation_handler(move |target| {
-            let allowed = target == "about:blank" || allowed_url(&target).is_some();
+            let allowed = permits_content_navigation(&target, &policy);
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
                 eprintln!("content navigation allowed={allowed}");
             }
@@ -337,14 +355,14 @@ fn create_content(
     let builder = if matches!(page, Page::Start) {
         builder.with_html(include_str!("start.html"))
     } else {
-        builder.with_url(page.url())
+        builder.with_url(initial_url)
     };
     #[cfg(target_os = "windows")]
     let builder = builder.with_additional_browser_args("");
     #[cfg(target_os = "linux")]
-    return build_view(builder, window, fixed);
+    return build_view(builder, window, fixed).map(|view| (view, local_navigation));
     #[cfg(not(target_os = "linux"))]
-    build_view(builder, window)
+    build_view(builder, window).map(|view| (view, local_navigation))
 }
 
 fn main() {
@@ -435,23 +453,23 @@ fn main() {
         Page::Start
     };
     #[cfg(target_os = "linux")]
-    let first = create_content(
+    let (first, local_navigation) = create_content(
         &window,
         &fixed,
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        initial_page,
+        (initial_page, initial_page.url()),
         content_rect,
     )
     .expect("Search start page failed");
     #[cfg(not(target_os = "linux"))]
-    let first = create_content(
+    let (first, local_navigation) = create_content(
         &window,
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        initial_page,
+        (initial_page, initial_page.url()),
         content_rect,
     )
     .expect("Search start page failed");
@@ -465,6 +483,7 @@ fn main() {
         pending_start_return: false,
         start_forward_url: None,
         view: first,
+        local_navigation,
     }];
     let mut active = 0usize;
     let mut next_id = 2u64;
@@ -498,6 +517,8 @@ fn main() {
                         tab.title = page.label().to_owned();
                         if !matches!(page, Page::Start) {
                             tab.start_forward_url = None;
+                        } else {
+                            tab.local_navigation.store(false, Ordering::SeqCst);
                         }
                     }
                     if chrome_ready {
@@ -573,7 +594,7 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            Page::Start,
+                            (Page::Start, Page::Start.url()),
                             rect,
                         );
                         #[cfg(not(target_os = "linux"))]
@@ -582,10 +603,10 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            Page::Start,
+                            (Page::Start, Page::Start.url()),
                             rect,
                         );
-                        if let Ok(view) = new_view {
+                        if let Ok((view, local_navigation)) = new_view {
                             let _ = tabs[active].view.set_visible(false);
                             tabs.push(Tab {
                                 id: next_id,
@@ -597,6 +618,7 @@ fn main() {
                                 pending_start_return: false,
                                 start_forward_url: None,
                                 view,
+                                local_navigation,
                             });
                             active = tabs.len() - 1;
                             next_id += 1;
@@ -623,10 +645,34 @@ fn main() {
                     }
                     Command::Open { value } => {
                         if let Some((page, url)) = page_from_input(&value) {
-                            let result = if matches!(page, Page::Start) {
-                                tabs[active].view.load_html(include_str!("start.html"))
+                            let result = if matches!(page, Page::LocalFixture) {
+                                let (_, rect) = bounds(&window);
+                                #[cfg(target_os = "linux")]
+                                let local_view = create_content(
+                                    &window, &fixed, next_id, content_proxy.clone(),
+                                    security_counts.clone(), (page, &url), rect,
+                                );
+                                #[cfg(not(target_os = "linux"))]
+                                let local_view = create_content(
+                                    &window, next_id, content_proxy.clone(),
+                                    security_counts.clone(), (page, &url), rect,
+                                );
+                                local_view.map(|(view, local_navigation)| {
+                                    let tab = &mut tabs[active];
+                                    tab.id = next_id;
+                                    next_id += 1;
+                                    tab.view = view;
+                                    tab.local_navigation = local_navigation;
+                                    tab.has_start_entry = false;
+                                })
                             } else {
-                                tabs[active].view.load_url(&url)
+                                let tab = &tabs[active];
+                                tab.local_navigation.store(false, Ordering::SeqCst);
+                                if matches!(page, Page::Start) {
+                                    tab.view.load_html(include_str!("start.html"))
+                                } else {
+                                    tab.view.load_url(&url)
+                                }
                             };
                             if result.is_ok() {
                                 tabs[active].page = page;
@@ -658,6 +704,7 @@ fn main() {
                                 {
                                     // Some engines skip load_html in their native history.
                                     if tab.view.load_html(include_str!("start.html")).is_ok() {
+                                        tab.local_navigation.store(false, Ordering::SeqCst);
                                         tab.start_forward_url = Some(std::mem::replace(
                                             &mut tab.display_url,
                                             Page::Start.url().to_owned(),
@@ -685,7 +732,9 @@ fn main() {
                         let tab = &mut tabs[active];
                         tab.pending_start_return = false;
                         if let Some(url) = tab.start_forward_url.take() {
-                            if tab.view.load_url(&url).is_ok() {
+                            if matches!(allowed_url(&url), Some(Page::LocalFixture)) {
+                                notice = Some("Чтобы открыть локальную страницу, введи её адрес.");
+                            } else if tab.view.load_url(&url).is_ok() {
                                 tab.loading = true;
                             } else {
                                 tab.start_forward_url = Some(url);
@@ -752,6 +801,20 @@ mod tests {
         ] {
             assert!(allowed_url(bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn public_navigation_does_not_inherit_loopback_access() {
+        let policy = AtomicBool::new(false);
+        let local = "http://127.0.0.1:43127/";
+        assert!(!permits_content_navigation(local, &policy));
+        policy.store(true, Ordering::SeqCst);
+        assert!(permits_content_navigation(local, &policy));
+        assert!(permits_content_navigation(
+            "https://rust-lang.org/",
+            &policy
+        ));
+        assert!(!permits_content_navigation(local, &policy));
     }
 
     #[test]
