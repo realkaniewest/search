@@ -377,7 +377,9 @@ fn main() {
             if mode == Mode::SecuritySmoke {
                 thread::sleep(Duration::from_secs(12));
                 let _ = timer_proxy.send_event(AppEvent::SecurityCheck);
-                thread::sleep(Duration::from_secs(13));
+                thread::sleep(Duration::from_secs(12));
+                let _ = timer_proxy.send_event(AppEvent::SecurityCheck);
+                thread::sleep(Duration::from_secs(10));
             } else {
                 thread::sleep(Duration::from_secs(25));
             }
@@ -532,15 +534,25 @@ fn main() {
                 // WebKitGTK can deny window.open before Wry's popup callback.
                 // The fixture separately checks that no popup was returned.
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
-                    println!("PASS: Search security boundary checks");
-                    *control_flow = ControlFlow::ExitWithCode(0);
+                    if tabs.len() == 1 && active == 0 {
+                        let _ = content_proxy.send_event(AppEvent::Command(Command::New));
+                        let _ = content_proxy.send_event(AppEvent::Command(Command::Open {
+                            value: Page::LocalFixture.url().to_owned(),
+                        }));
+                    } else if tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title) {
+                        println!("PASS: Search security boundary checks");
+                        *control_flow = ControlFlow::ExitWithCode(0);
+                    } else {
+                        eprintln!("FAIL: Search second fixture tab did not load");
+                        *control_flow = ControlFlow::ExitWithCode(1);
+                    }
                 } else {
                     eprintln!("FAIL: Search security boundary checks incomplete");
                     *control_flow = ControlFlow::ExitWithCode(1);
                 }
             }
             Event::UserEvent(AppEvent::TimedOut) => {
-                eprintln!("FAIL: Search first window did not load in 25 seconds");
+                eprintln!("FAIL: Search first window did not load before the test deadline");
                 *control_flow = ControlFlow::ExitWithCode(1);
             }
             Event::UserEvent(AppEvent::Command(command)) => {
