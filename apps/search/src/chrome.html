@@ -8,6 +8,9 @@
   .bar { position: relative; height: 50px; display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 78px; border-bottom: 1px solid #ffffff12; background: linear-gradient(112deg, #292c32d9, #202126e6); }
   @media (prefers-reduced-transparency: reduce) { .bar { background: #272930; } }
   .navigation { display: flex; flex: none; gap: 2px; margin-right: 6px; }
+  .tab-strip { display: flex; flex: 1; min-width: 0; align-items: center; }
+  .tab-scroll { min-width: 24px; padding: 0; font-size: 17px; }
+  .tab-scroll[hidden] { display: none; }
   .tabs { display: flex; min-width: 0; flex: 1; gap: 0; overflow-x: auto; scrollbar-width: none; border-radius: 19px; background: #ffffff0e; }
   .tabs::-webkit-scrollbar { display: none; }
   .tab { position: relative; flex: 1 0 125px; max-width: 230px; min-width: 0; height: 32px; color: #c5c5c7; display: flex; align-items: center; padding: 0 5px 0 13px; }
@@ -59,10 +62,22 @@
     }
   }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <script>
   'use strict';
   const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice'), activity = document.getElementById('activity');
+  const tabsLeft = document.getElementById('tabs-left'), tabsRight = document.getElementById('tabs-right');
+  function updateTabScroll() {
+    const controlsWidth = tabsLeft.hidden ? 0 : tabsLeft.offsetWidth + tabsRight.offsetWidth;
+    const overflow = tabs.scrollWidth > tabs.clientWidth + controlsWidth + 1;
+    tabsLeft.hidden = tabsRight.hidden = !overflow;
+    tabsLeft.disabled = tabs.scrollLeft <= 1;
+    tabsRight.disabled = tabs.scrollLeft >= tabs.scrollWidth - tabs.clientWidth - 1;
+  }
+  tabsLeft.onclick = () => tabs.scrollBy({left:-tabs.clientWidth});
+  tabsRight.onclick = () => tabs.scrollBy({left:tabs.clientWidth});
+  tabs.addEventListener('scroll', updateTabScroll);
+  new ResizeObserver(updateTabScroll).observe(tabs.parentElement);
   const send = value => window.ipc.postMessage(JSON.stringify(value));
   document.getElementById('add').onclick = () => send({type:'new'});
   document.getElementById('back').onclick = () => send({type:'back'});
@@ -112,12 +127,13 @@
       const item = document.createElement('div'); item.className='tab'+(index===state.active?' active':'')+(index===state.active && activeChanged?' just-selected':'');
       const button = document.createElement('button'); button.className='select'; button.type='button'; button.dataset.action='select'; button.dataset.index=index; button.setAttribute('role','tab'); button.setAttribute('aria-selected',index===state.active?'true':'false'); button.setAttribute('aria-label',tab.loading?tab.label+' загружается':tab.label); button.tabIndex=index===state.active?0:-1;
       const dot=document.createElement('span'); dot.className='dot'+(tab.loading?' loading':'');
-      const name=document.createElement('span'); name.className='name'; name.textContent=tab.label;
+      const name=document.createElement('span'); name.className='name'; name.textContent=tab.label; button.title=tab.label;
       const close=document.createElement('button'); close.className='close'; close.type='button'; close.dataset.action='close'; close.dataset.index=index; close.textContent='×'; close.setAttribute('aria-label','Закрыть вкладку '+tab.label);
       close.onclick=()=>send({type:'close',id:tab.id});
       button.onclick=()=>send({type:'select',id:tab.id}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
-    tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
+    updateTabScroll();
+    if (activeChanged) tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
     if(focusedIndex!==undefined && state.tabs.length) {
       const previousIndex = Number(focusedIndex);
       const previousId = previous.tabs[previousIndex]?.id;
@@ -126,7 +142,7 @@
       const remaining = remainingIndex >= 0 && remainingIndex < state.tabs.length;
       const index = remaining ? remainingIndex : state.active;
       const action = remaining ? focusedAction : 'select';
-      tabs.querySelector(`[data-action="${action}"][data-index="${index}"]`)?.focus();
+      tabs.querySelector(`[data-action="${action}"][data-index="${index}"]`)?.focus({preventScroll:true});
     }
   }
   window.renderSearch = state => {
