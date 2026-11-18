@@ -59,7 +59,7 @@
     }
   }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" aria-label="Назад">‹</button><button class="tool" id="forward" aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" aria-describedby="notice"><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <script>
   'use strict';
   const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice'), activity = document.getElementById('activity');
@@ -143,6 +143,8 @@
     window.searchState = state;
     if (tabsChanged) renderTabs(state, previous, activeChanged);
 
+    document.getElementById('back').disabled = !state.can_back;
+    document.getElementById('forward').disabled = !state.can_forward;
     const activeTab = state.tabs[state.active];
     document.getElementById('reload').disabled = !activeTab || activeTab.url === 'search:start';
     if(document.activeElement!==address || activeChanged) {

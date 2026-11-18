@@ -229,6 +229,12 @@ struct Tab {
     local_navigation: Arc<AtomicBool>,
 }
 
+impl Tab {
+    fn has_virtual_start_back(&self) -> bool {
+        self.has_start_entry && !matches!(self.page, Page::Start)
+    }
+}
+
 fn loaded_page(url: &str, pending_start_return: bool) -> Option<(Page, String)> {
     if url == "about:blank" && pending_start_return {
         return Some((Page::Start, Page::Start.url().to_owned()));
@@ -261,6 +267,8 @@ struct TabInfo<'a> {
 #[derive(Serialize)]
 struct ChromeState<'a> {
     active: usize,
+    can_back: bool,
+    can_forward: bool,
     tabs: Vec<TabInfo<'a>>,
     notice: Option<&'static str>,
     attempted_address: Option<&'a str>,
@@ -273,8 +281,18 @@ fn sync_chrome(
     notice: Option<&'static str>,
     attempted_address: Option<&str>,
 ) {
+    let tab = &tabs[active];
+    let native_back = tab.view.can_go_back();
+    let native_forward = tab.view.can_go_forward();
+    let virtual_back = matches!(native_back, Ok(false))
+        && matches!(native_forward, Ok(false))
+        && tab.has_virtual_start_back();
     let state = ChromeState {
         active,
+        can_back: tab.start_forward_url.is_none()
+            && (matches!(native_back, Ok(true)) || virtual_back),
+        can_forward: !tab.loading
+            && (tab.start_forward_url.is_some() || matches!(native_forward, Ok(true))),
         tabs: tabs
             .iter()
             .map(|tab| TabInfo {
@@ -819,9 +837,8 @@ fn main() {
                         if tab.start_forward_url.is_none() {
                             match tab.view.can_go_back() {
                                 Ok(false)
-                                    if tab.has_start_entry
-                                        && !matches!(tab.page, Page::Start)
-                                        && matches!(tab.view.can_go_forward(), Ok(false)) =>
+                                    if matches!(tab.view.can_go_forward(), Ok(false))
+                                        && tab.has_virtual_start_back() =>
                                 {
                                     // Some engines skip load_html in their native history.
                                     if tab.view.load_html(include_str!("start.html")).is_ok() {

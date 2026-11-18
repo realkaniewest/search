@@ -66,6 +66,11 @@ window.renderSearch({active: 0, tabs: [
   {id: 11, label: 'Rust', url: 'https://rust-lang.org/'},
 ]});
 assert.equal(tabs.children.length, 2);
+assert.equal(elements.get('back').disabled, true, 'new tab has no back entry');
+assert.equal(elements.get('forward').disabled, true, 'new tab has no forward entry');
+window.renderSearch({...window.searchState, can_back: true, can_forward: true});
+assert.equal(elements.get('back').disabled, false);
+assert.equal(elements.get('forward').disabled, false);
 assert.equal(elements.get('reload').disabled, true, 'start page has no reload history entry');
 assert.equal(tabs.children[0].children[0].getAttribute('role'), 'tab');
 assert.equal(tabs.children[0].children[1].tagName, 'button', 'close is a separate keyboard button');
