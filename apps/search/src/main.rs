@@ -69,9 +69,17 @@ impl SecurityCounts {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Command {
     New,
-    Select { index: usize },
-    Close { index: usize },
-    Open { value: String },
+    Select {
+        index: usize,
+    },
+    Close {
+        index: usize,
+    },
+    Open {
+        value: String,
+    },
+    #[serde(rename = "cancel-address")]
+    CancelAddress,
     Back,
     Forward,
     Reload,
@@ -449,11 +457,10 @@ fn main() {
             });
         }
     }
-    if mode != Mode::Normal {
+    if mode == Mode::SecuritySmoke {
         let timer_proxy = proxy.clone();
         thread::spawn(move || {
-            let seconds = if mode == Mode::SecuritySmoke { 34 } else { 25 };
-            thread::sleep(Duration::from_secs(seconds));
+            thread::sleep(Duration::from_secs(34));
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
         });
     }
@@ -541,6 +548,16 @@ fn main() {
     let mut notice = None;
     let mut attempted_address: Option<String> = None;
     let content_proxy = event_loop.create_proxy();
+
+    if mode == Mode::Smoke {
+        // Native WebView creation may block before the event loop can consume
+        // readiness callbacks. The wrapper separately bounds total runtime.
+        let timer_proxy = event_loop.create_proxy();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(25));
+            let _ = timer_proxy.send_event(AppEvent::TimedOut);
+        });
+    }
 
     event_loop.run(move |event, _, control_flow| {
         let _keep_window_alive = &window;
@@ -790,6 +807,7 @@ fn main() {
                             attempted_address = Some(value);
                         }
                     }
+                    Command::CancelAddress => {}
                     Command::Back => {
                         let tab = &mut tabs[active];
                         if tab.start_forward_url.is_none() {

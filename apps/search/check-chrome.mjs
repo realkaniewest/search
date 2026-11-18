@@ -144,6 +144,15 @@ window.renderSearch({active: 1, tabs: [
 assert.equal(address.value, 'https://blocked.invalid/', 'rejected address stays editable');
 assert.equal(address.getAttribute('aria-invalid'), 'true');
 assert.equal(elements.get('notice').textContent, 'Пока доступны только выбранные сайты.');
+address.focus();
+address.dispatch('keydown', {key: 'Escape', isComposing: true});
+assert.equal(address.value, 'https://blocked.invalid/', 'composition owns Escape');
+address.dispatch('keydown', {key: 'Escape'});
+assert.deepEqual(messages.pop(), {type: 'cancel-address'});
+assert.equal(address.value, 'https://rust-lang.org/learn', 'Escape restores the current URL');
+assert.equal(address.getAttribute('aria-invalid'), 'false');
+assert.equal(elements.get('notice').textContent, '');
+address.blur();
 window.renderSearch({active: 1, tabs: [
   {label: 'Новая вкладка', url: 'search:start'},
   {label: 'Rust', url: 'https://rust-lang.org/learn'},

@@ -69,7 +69,17 @@
   document.getElementById('forward').onclick = () => send({type:'forward'});
   document.getElementById('reload').onclick = () => send({type:'reload'});
   address.addEventListener('keydown', e => {
-    if(e.key!=='Enter' || e.isComposing || !address.value.trim()) return;
+    if(e.isComposing) return;
+    if(e.key === 'Escape') {
+      e.preventDefault();
+      const {active, tabs: stateTabs} = window.searchState;
+      address.value = displayAddress(stateTabs[active]?.url);
+      notice.textContent = '';
+      address.setAttribute('aria-invalid', 'false');
+      send({type:'cancel-address'});
+      return;
+    }
+    if(e.key!=='Enter' || !address.value.trim()) return;
     const command={type:'open',value:address.value};
     const encoder=new TextEncoder();
     if(encoder.encode(address.value).length>1024 || encoder.encode(JSON.stringify(command)).length>2048) {
@@ -86,6 +96,7 @@
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') { e.preventDefault(); send({type:'close',index:window.searchState.active}); }
   });
+  const displayAddress = url => url === 'search:start' ? '' : url ?? '';
   window.searchState = {active:0,tabs:[]};
   function renderTabs(state, activeChanged) {
     const focused = document.activeElement;
@@ -123,7 +134,7 @@
     document.getElementById('reload').disabled = !activeTab || activeTab.url === 'search:start';
     if(document.activeElement!==address || activeChanged) {
       const url = state.tabs[state.active]?.url;
-      address.value = state.attempted_address ?? (url === 'search:start' ? '' : url ?? '');
+      address.value = state.attempted_address ?? displayAddress(url);
     }
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
