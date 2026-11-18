@@ -143,6 +143,11 @@ window.renderSearch({active: 1, tabs: [
 assert.equal(address.value, 'https://blocked.invalid/', 'rejected address stays editable');
 assert.equal(address.getAttribute('aria-invalid'), 'true');
 assert.equal(elements.get('notice').textContent, 'Пока доступны только выбранные сайты.');
+window.renderSearch({active: 1, tabs: [
+  {label: 'Новая вкладка', url: 'search:start'},
+  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+], notice: 'Открыто 12 вкладок.'});
+assert.equal(address.getAttribute('aria-invalid'), 'false', 'other notices do not mark the address invalid');
 address.dispatch('input');
 assert.equal(elements.get('notice').textContent, '');
 assert.equal(address.getAttribute('aria-invalid'), 'false');

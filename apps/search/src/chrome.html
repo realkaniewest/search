@@ -31,7 +31,7 @@
   .address:focus { border-color: #bcbec2; box-shadow: 0 0 0 3px #ffffff18; }
   .address[aria-invalid="true"] { border-color: #d4a8a3; }
   .notice { position: absolute; bottom: 1px; right: 16px; max-width: min(390px,45vw); color: #efc2bc; font-size: 11px; background: #262830; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .bar:has(.address[aria-invalid="true"]) { align-items: flex-start; padding-top: 3px; }
+  .bar:has(.notice:not(:empty)) { align-items: flex-start; padding-top: 3px; }
   .activity { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   :focus-visible { outline: 2px solid #d0d0d2; outline-offset: 2px; }
   @media(max-width:820px) { .bar { padding-left: 16px; gap: 5px; } .navigation { margin-right: 1px; } .tab { flex-basis: 110px; } .address { width: 190px; } }
@@ -111,7 +111,7 @@
     }
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
-    address.setAttribute('aria-invalid',state.notice?'true':'false');
+    address.setAttribute('aria-invalid',state.attempted_address != null?'true':'false');
     if(focusedIndex!==undefined && state.tabs.length) {
       const index=Math.min(Number(focusedIndex),state.tabs.length-1);
       tabs.querySelector(`[data-action="${focusedAction}"][data-index="${index}"]`)?.focus();
