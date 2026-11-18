@@ -4,13 +4,17 @@ import http.server
 import json
 import subprocess
 import sys
+import tempfile
 import threading
+from pathlib import Path
 
 
 HOST = "127.0.0.1"
 PORT = 43127
 TITLE = "Search security fixture ready"
-PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</title></head>
+
+def fixture_page(file_url):
+    return f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</title></head>
 <body><h1>Search security fixture</h1><script>
 (async () => {{
   const result = {{ipc: typeof window.ipc !== 'undefined', popup: false,
@@ -48,6 +52,16 @@ PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</titl
       new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
     ]);
   }}
+  // Both targets are test-owned. The scheme has no registered application.
+  for (const [name, target] of [
+    ['fileNavigationStayedOnFixture', {json.dumps(file_url)}],
+    ['customSchemeStayedOnFixture', 'search-smoke-unregistered://local/canary'],
+  ]) {{
+    const before = location.href;
+    try {{ location.assign(target); }} catch (_) {{}}
+    await new Promise(resolve => setTimeout(resolve, 250));
+    result[name] = location.href === before && document.title === {json.dumps(TITLE)};
+  }}
   await fetch('/results', {{method:'POST', headers:{{'content-type':'application/json'}}, body:JSON.stringify(result)}});
   setTimeout(() => {{ location.href = 'https://blocked.invalid/'; }}, 100);
 }})();
@@ -55,12 +69,13 @@ PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</titl
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    page = b""
     results = []
     downloads = 0
 
     def do_GET(self):
         if self.path == "/":
-            data, kind = PAGE, "text/html; charset=utf-8"
+            data, kind = type(self).page, "text/html; charset=utf-8"
         elif self.path == "/download":
             type(self).downloads += 1
             data, kind = b"blocked download", "application/octet-stream"
@@ -97,11 +112,18 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: run_search_security_smoke.py <binary> [wrapper args]", file=sys.stderr)
         return 2
+    with tempfile.TemporaryDirectory(prefix="search-navigation-smoke-") as directory:
+        canary = Path(directory) / "canary.html"
+        canary.write_text("<title>Search file navigation canary</title>", encoding="utf-8")
+        Handler.page = fixture_page(canary.as_uri())
+        return run_fixture(sys.argv[1:] + ["--security-smoke"])
+
+
+def run_fixture(command):
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        command = sys.argv[1:] + ["--security-smoke"]
         for attempt in (1, 2):
             try:
                 run = subprocess.run(command, capture_output=True, text=True, timeout=50, check=False)
@@ -125,6 +147,10 @@ def main():
                 if not isinstance(result, dict) or result.get("ipc") is not False or result.get("popup") is not False:
                     print(f"FAIL: fixture boundary result {result!r}", file=sys.stderr)
                     return 1
+                for check in ("fileNavigationStayedOnFixture", "customSchemeStayedOnFixture"):
+                    if result.get(check) is not True:
+                        print(f"FAIL: {check} unverified: {result!r}", file=sys.stderr)
+                        return 1
                 permission_results = {
                     name: result.get(name) for name in ("camera", "microphone", "geolocation")
                 }
@@ -149,6 +175,7 @@ def main():
                 ):
                     print(f"FAIL: temporary data visible from another tab or process: {result!r}", file=sys.stderr)
                     return 1
+        print("PASS: file URL and unregistered scheme left the local fixture loaded")
         print(f"PASS: fixture saw no IPC/popup/permission grant or retained cookie/localStorage; download requests={Handler.downloads}")
         return 0
     finally:
