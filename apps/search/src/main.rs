@@ -327,7 +327,9 @@ fn create_content(
         builder.with_url(page.url())
     };
     #[cfg(target_os = "windows")]
-    let builder = builder.with_additional_browser_args("");
+    let builder = builder
+        .with_additional_browser_args("")
+        .with_profile_name(format!("SearchTemporaryTab{id}"));
     #[cfg(target_os = "linux")]
     return build_view(builder, window, fixed);
     #[cfg(not(target_os = "linux"))]
@@ -536,9 +538,6 @@ fn main() {
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
                     if tabs.len() == 1 && active == 0 {
                         let _ = content_proxy.send_event(AppEvent::Command(Command::New));
-                        let _ = content_proxy.send_event(AppEvent::Command(Command::Open {
-                            value: Page::LocalFixture.url().to_owned(),
-                        }));
                     } else if tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title) {
                         println!("PASS: Search security boundary checks");
                         *control_flow = ControlFlow::ExitWithCode(0);
@@ -561,6 +560,11 @@ fn main() {
                 match command {
                     Command::New if tabs.len() < MAX_TABS => {
                         let (_, rect) = bounds(&window);
+                        let page = if mode == Mode::SecuritySmoke {
+                            Page::LocalFixture
+                        } else {
+                            Page::Start
+                        };
                         #[cfg(target_os = "linux")]
                         let new_view = create_content(
                             &window,
@@ -568,7 +572,7 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            Page::Start,
+                            page,
                             rect,
                         );
                         #[cfg(not(target_os = "linux"))]
@@ -577,18 +581,18 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            Page::Start,
+                            page,
                             rect,
                         );
                         if let Ok(view) = new_view {
                             let _ = tabs[active].view.set_visible(false);
                             tabs.push(Tab {
                                 id: next_id,
-                                page: Page::Start,
-                                display_url: Page::Start.url().to_owned(),
-                                title: Page::Start.label().to_owned(),
+                                page,
+                                display_url: page.url().to_owned(),
+                                title: page.label().to_owned(),
                                 loading: false,
-                                has_start_entry: true,
+                                has_start_entry: matches!(page, Page::Start),
                                 pending_start_return: false,
                                 view,
                             });
