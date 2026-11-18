@@ -85,6 +85,7 @@ enum AppEvent {
     ContentLoaded { id: u64, url: String },
     ContentTitle { id: u64, title: String },
     SecurityCheck,
+    SecurityProgress,
     TimedOut,
     Command(Command),
 }
@@ -314,6 +315,9 @@ fn create_content(
     let popup_counts = counts.clone();
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
+    let download_proxy = proxy.clone();
+    let second_fixture =
+        navigation_counts.fixture_mode && id == 2 && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
         .with_incognito(true)
@@ -327,6 +331,9 @@ fn create_content(
             download_counts
                 .blocked_download
                 .fetch_add(1, Ordering::SeqCst);
+            if second_fixture {
+                let _ = download_proxy.send_event(AppEvent::SecurityProgress);
+            }
             false
         })
         .with_new_window_req_handler(move |_, _| {
@@ -355,12 +362,8 @@ fn create_content(
                     .fetch_add(1, Ordering::SeqCst);
                 // In the two-tab smoke run, the second fixture attempts this
                 // navigation after its report reaches the local server.
-                if navigation_counts.fixture_mode
-                    && id == 2
-                    && matches!(page, Page::LocalFixture)
-                    && target == "https://blocked.invalid/"
-                {
-                    let _ = fixture_proxy.send_event(AppEvent::SecurityCheck);
+                if second_fixture && target == "https://blocked.invalid/" {
+                    let _ = fixture_proxy.send_event(AppEvent::SecurityProgress);
                 }
             }
             allowed
@@ -617,7 +620,10 @@ fn main() {
                     }
                 }
             }
-            Event::UserEvent(AppEvent::SecurityCheck) if mode == Mode::SecuritySmoke => {
+            Event::UserEvent(signal @ (AppEvent::SecurityCheck | AppEvent::SecurityProgress))
+                if mode == Mode::SecuritySmoke =>
+            {
+                let checkpoint = matches!(signal, AppEvent::SecurityCheck);
                 let (nav, popup, download, permission) = security_counts.snapshot();
                 let title_verified = tabs
                     .first()
@@ -626,7 +632,7 @@ fn main() {
                 // WebKitGTK can deny window.open before Wry's popup callback.
                 // The fixture separately checks that no popup was returned.
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
-                    if tabs.len() == 1 && active == 0 {
+                    if checkpoint && tabs.len() == 1 && active == 0 {
                         let _ = content_proxy.send_event(AppEvent::Command(Command::New));
                     } else if nav >= 2
                         && download >= 2
@@ -634,11 +640,8 @@ fn main() {
                     {
                         println!("PASS: Search security boundary checks");
                         *control_flow = ControlFlow::ExitWithCode(0);
-                    } else {
-                        eprintln!("FAIL: Search second fixture tab did not load");
-                        *control_flow = ControlFlow::ExitWithCode(1);
                     }
-                } else {
+                } else if checkpoint {
                     eprintln!("FAIL: Search security boundary checks incomplete");
                     *control_flow = ControlFlow::ExitWithCode(1);
                 }
