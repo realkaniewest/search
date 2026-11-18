@@ -94,7 +94,12 @@
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:'new'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); address.focus(); address.select(); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
-    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') { e.preventDefault(); send({type:'close',index:window.searchState.active}); }
+    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') {
+      e.preventDefault();
+      const { active, tabs: stateTabs } = window.searchState;
+      const tab = stateTabs[active];
+      if(tab) send({type:'close',id:tab.id});
+    }
   });
   const displayAddress = url => url === 'search:start' ? '' : url ?? '';
   window.searchState = {active:0,tabs:[]};
@@ -109,8 +114,8 @@
       const dot=document.createElement('span'); dot.className='dot'+(tab.loading?' loading':'');
       const name=document.createElement('span'); name.className='name'; name.textContent=tab.label;
       const close=document.createElement('button'); close.className='close'; close.type='button'; close.dataset.action='close'; close.dataset.index=index; close.textContent='×'; close.setAttribute('aria-label','Закрыть вкладку '+tab.label);
-      close.onclick=()=>send({type:'close',index});
-      button.onclick=()=>send({type:'select',index}); button.append(dot,name); item.append(button,close); tabs.append(item);
+      close.onclick=()=>send({type:'close',id:tab.id});
+      button.onclick=()=>send({type:'select',id:tab.id}); button.append(dot,name); item.append(button,close); tabs.append(item);
     });
     tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
     if(focusedIndex!==undefined && state.tabs.length) {
@@ -158,11 +163,11 @@
     else if(e.key==='ArrowLeft') next=(index+count-1)%count;
     else if(e.key==='Home') next=0;
     else if(e.key==='End') next=count-1;
-    else if(e.key==='Delete') { e.preventDefault(); send({type:'close',index}); return; }
+    else if(e.key==='Delete') { e.preventDefault(); send({type:'close',id:window.searchState.tabs[index].id}); return; }
     else return;
     e.preventDefault();
     tabs.querySelector(`[role="tab"][data-index="${next}"]`)?.focus();
-    send({type:'select',index:next});
+    send({type:'select',id:window.searchState.tabs[next].id});
   });
 </script>
 </html>

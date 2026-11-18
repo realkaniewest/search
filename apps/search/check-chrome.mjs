@@ -62,8 +62,8 @@ runInNewContext(script, { document, window, Number, JSON, TextEncoder });
 
 const tabs = elements.get('tabs');
 window.renderSearch({active: 0, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/'},
 ]});
 assert.equal(tabs.children.length, 2);
 assert.equal(elements.get('reload').disabled, true, 'start page has no reload history entry');
@@ -74,8 +74,8 @@ assert.equal(tabs.children[1].children[0].tabIndex, -1);
 assert.equal(elements.get('activity').textContent, '');
 
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start', loading: false},
-  {label: 'Rust', url: 'https://rust-lang.org/', loading: true},
+  {id: 10, label: 'Новая вкладка', url: 'search:start', loading: false},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/', loading: true},
 ]});
 assert.equal(elements.get('activity').textContent, 'Загрузка страницы…');
 assert.equal(elements.get('reload').disabled, false);
@@ -83,36 +83,38 @@ assert.equal(tabs.children[1].children[0].getAttribute('aria-label'), 'Rust за
 assert.equal(tabs.children[1].children[0].children[0].className, 'dot loading');
 assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible');
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start', loading: false},
-  {label: 'Rust Programming Language', url: 'https://rust-lang.org/', loading: false},
+  {id: 10, label: 'Новая вкладка', url: 'search:start', loading: false},
+  {id: 11, label: 'Rust Programming Language', url: 'https://rust-lang.org/', loading: false},
 ]});
 assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible after title update');
 window.renderSearch({active: 0, tabs: [
-  {label: 'Новая вкладка', url: 'search:start', loading: false},
-  {label: 'Rust', url: 'https://rust-lang.org/', loading: false},
+  {id: 10, label: 'Новая вкладка', url: 'search:start', loading: false},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/', loading: false},
 ]});
 assert.equal(elements.get('activity').textContent, '');
 
 const first = tabs.children[0].children[0];
 first.focus();
 tabs.dispatch('keydown', {target: first, key: 'ArrowRight'});
-assert.deepEqual(messages.pop(), {type: 'select', index: 1});
+assert.deepEqual(messages.pop(), {type: 'select', id: 11});
 assert.equal(document.activeElement.dataset.index, 1);
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/'},
 ]});
 assert.equal(document.activeElement.dataset.index, 1, 'rerender keeps tab focus');
 tabs.dispatch('keydown', {target: document.activeElement, key: 'Home'});
-assert.deepEqual(messages.pop(), {type: 'select', index: 0});
+assert.deepEqual(messages.pop(), {type: 'select', id: 10});
 tabs.dispatch('keydown', {target: document.activeElement, key: 'End'});
-assert.deepEqual(messages.pop(), {type: 'select', index: 1});
+assert.deepEqual(messages.pop(), {type: 'select', id: 11});
 tabs.dispatch('keydown', {target: document.activeElement, key: 'ArrowLeft'});
-assert.deepEqual(messages.pop(), {type: 'select', index: 0});
+assert.deepEqual(messages.pop(), {type: 'select', id: 10});
 tabs.dispatch('keydown', {target: document.activeElement, key: 'Delete'});
-assert.deepEqual(messages.pop(), {type: 'close', index: 0});
-tabs.children[1].children[1].dispatch('click');
-assert.deepEqual(messages.pop(), {type: 'close', index: 1});
+assert.deepEqual(messages.pop(), {type: 'close', id: 10});
+const closeRequest = tabs.children[1].children[1];
+closeRequest.dispatch('click');
+closeRequest.dispatch('click');
+assert.deepEqual(messages.splice(-2), [{type: 'close', id: 11}, {type: 'close', id: 11}]);
 
 elements.get('reload').dispatch('click');
 assert.deepEqual(messages.pop(), {type: 'reload'});
@@ -121,25 +123,25 @@ const address = elements.get('address');
 address.focus();
 address.value = 'https://www.wikipedia.org/wiki/Rust';
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/learn'},
 ]});
 assert.equal(address.value, 'https://www.wikipedia.org/wiki/Rust', 'page update must not erase typed URL');
 window.renderSearch({active: 0, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/learn'},
 ]});
 assert.equal(address.value, '', 'switching tabs must replace the old typed URL');
 address.blur();
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/learn'},
 ]});
 assert.equal(address.value, 'https://rust-lang.org/learn');
 
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/learn'},
 ], notice: 'Пока доступны только выбранные сайты.', attempted_address: 'https://blocked.invalid/'});
 assert.equal(address.value, 'https://blocked.invalid/', 'rejected address stays editable');
 assert.equal(address.getAttribute('aria-invalid'), 'true');
@@ -154,8 +156,8 @@ assert.equal(address.getAttribute('aria-invalid'), 'false');
 assert.equal(elements.get('notice').textContent, '');
 address.blur();
 window.renderSearch({active: 1, tabs: [
-  {label: 'Новая вкладка', url: 'search:start'},
-  {label: 'Rust', url: 'https://rust-lang.org/learn'},
+  {id: 10, label: 'Новая вкладка', url: 'search:start'},
+  {id: 11, label: 'Rust', url: 'https://rust-lang.org/learn'},
 ], notice: 'Открыто 12 вкладок.'});
 assert.equal(address.getAttribute('aria-invalid'), 'false', 'other notices do not mark the address invalid');
 address.dispatch('input');
