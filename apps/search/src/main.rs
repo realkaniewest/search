@@ -201,6 +201,7 @@ struct Tab {
     loading: bool,
     has_start_entry: bool,
     pending_start_return: bool,
+    start_forward_url: Option<String>,
     view: WebView,
 }
 
@@ -451,6 +452,7 @@ fn main() {
         loading: false,
         has_start_entry: matches!(initial_page, Page::Start),
         pending_start_return: false,
+        start_forward_url: None,
         view: first,
     }];
     let mut active = 0usize;
@@ -483,6 +485,9 @@ fn main() {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.title = page.label().to_owned();
+                        if !matches!(page, Page::Start) {
+                            tab.start_forward_url = None;
+                        }
                     }
                     if chrome_ready {
                         sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
@@ -579,13 +584,14 @@ fn main() {
                                 loading: false,
                                 has_start_entry: true,
                                 pending_start_return: false,
+                                start_forward_url: None,
                                 view,
                             });
                             active = tabs.len() - 1;
                             next_id += 1;
                         }
                     }
-                    Command::Select { index } if index < tabs.len() => {
+                    Command::Select { index } if index < tabs.len() && index != active => {
                         let _ = tabs[active].view.set_visible(false);
                         active = index;
                         let _ = tabs[active].view.set_visible(true);
@@ -597,9 +603,7 @@ fn main() {
                                 active -= 1;
                             } else if index == active {
                                 active = active.min(tabs.len() - 1);
-                            }
-                            for (i, tab) in tabs.iter().enumerate() {
-                                let _ = tab.view.set_visible(i == active);
+                                let _ = tabs[active].view.set_visible(true);
                             }
                         }
                     }
@@ -619,6 +623,7 @@ fn main() {
                                     tabs[active].has_start_entry = true;
                                 }
                                 tabs[active].pending_start_return = false;
+                                tabs[active].start_forward_url = None;
                             } else {
                                 notice = Some("Не удалось открыть страницу. Попробуй ещё раз.");
                                 attempted_address = Some(value);
@@ -629,17 +634,52 @@ fn main() {
                         }
                     }
                     Command::Back => {
-                        tabs[active].pending_start_return = tabs[active].has_start_entry;
-                        let _ = tabs[active].view.go_back();
+                        let tab = &mut tabs[active];
+                        if tab.start_forward_url.is_none() {
+                            match tab.view.can_go_back() {
+                                Ok(false)
+                                    if tab.has_start_entry
+                                        && !matches!(tab.page, Page::Start)
+                                        && matches!(tab.view.can_go_forward(), Ok(false)) =>
+                                {
+                                    // Some engines skip load_html in their native history.
+                                    if tab.view.load_html(include_str!("start.html")).is_ok() {
+                                        tab.start_forward_url = Some(std::mem::replace(
+                                            &mut tab.display_url,
+                                            Page::Start.url().to_owned(),
+                                        ));
+                                        tab.page = Page::Start;
+                                        tab.title = Page::Start.label().to_owned();
+                                        tab.loading = false;
+                                        tab.pending_start_return = false;
+                                    }
+                                }
+                                Ok(false) => {}
+                                _ => {
+                                    tab.pending_start_return = tab.has_start_entry;
+                                    let _ = tab.view.go_back();
+                                }
+                            }
+                        }
                     }
                     Command::Reload if !matches!(tabs[active].page, Page::Start) => {
                         if tabs[active].view.reload().is_err() {
                             notice = Some("Не удалось обновить страницу.");
                         }
                     }
-                    Command::Forward => {
-                        tabs[active].pending_start_return = false;
-                        let _ = tabs[active].view.go_forward();
+                    Command::Forward if !tabs[active].loading => {
+                        let tab = &mut tabs[active];
+                        tab.pending_start_return = false;
+                        if let Some(url) = tab.start_forward_url.take() {
+                            if tab.view.load_url(&url).is_ok() {
+                                tab.loading = true;
+                            } else {
+                                tab.start_forward_url = Some(url);
+                                notice = Some("Не удалось открыть следующую страницу.");
+                            }
+                        } else {
+                            let _ = tab.view.go_forward();
+                        }
                     }
                     _ => {}
                 }
