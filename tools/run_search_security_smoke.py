@@ -14,23 +14,39 @@ PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</titl
 <body><h1>Search security fixture</h1><script>
 (async () => {{
   const result = {{ipc: typeof window.ipc !== 'undefined', popup: false,
-    camera: 'unavailable', geolocation: 'unavailable',
+    camera: 'unavailable', microphone: 'unavailable', geolocation: 'unavailable',
     previousCookie: document.cookie, previousStorage: localStorage.getItem('search_probe')}};
   document.cookie = 'search_probe=stored; SameSite=Lax';
   localStorage.setItem('search_probe', 'stored');
+  result.wroteCookie = document.cookie.includes('search_probe=stored');
+  result.wroteStorage = localStorage.getItem('search_probe') === 'stored';
   try {{ result.popup = !!window.open('https://blocked.invalid/', '_blank'); }} catch (_) {{}}
   const link = document.createElement('a'); link.href = '/download'; link.download = 'blocked.txt';
   document.body.append(link); link.click();
   if (navigator.mediaDevices?.getUserMedia) {{
-    result.camera = await Promise.race([
-      navigator.mediaDevices.getUserMedia({{audio: true, video: true}})
-        .then(() => 'granted', () => 'denied'),
-      new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
-    ]);
+    async function checkMedia(constraints) {{
+      return Promise.race([
+        navigator.mediaDevices.getUserMedia(constraints).then(stream => {{
+          stream.getTracks().forEach(track => track.stop());
+          return 'granted';
+        }}, error => error.name === 'NotAllowedError' || error.name === 'SecurityError'
+          ? 'denied' : 'media-error:' + error.name),
+        new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+      ]);
+    }}
+    result.camera = await checkMedia({{video: true}});
+    result.microphone = await checkMedia({{audio: true}});
   }}
   if (navigator.geolocation) {{
-    result.geolocation = await new Promise(resolve => navigator.geolocation.getCurrentPosition(
-      () => resolve('granted'), () => resolve('denied'), {{timeout: 2500}}));
+    result.geolocation = await Promise.race([
+      new Promise(resolve => navigator.geolocation.getCurrentPosition(
+        () => resolve('granted'),
+        error => resolve(error.code === 1 ? 'denied'
+          : error.code === 2 ? 'unavailable' : error.code === 3 ? 'timeout' : 'error'),
+        {{timeout: 2500}}
+      )),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+    ]);
   }}
   await fetch('/results', {{method:'POST', headers:{{'content-type':'application/json'}}, body:JSON.stringify(result)}});
   setTimeout(() => {{ location.href = 'https://blocked.invalid/'; }}, 100);
@@ -89,26 +105,50 @@ def main():
         for attempt in (1, 2):
             try:
                 run = subprocess.run(command, capture_output=True, text=True, timeout=50, check=False)
-            except subprocess.TimeoutExpired:
-                print("FAIL: Search security smoke timed out", file=sys.stderr)
+            except subprocess.TimeoutExpired as error:
+                for stream in (error.stdout, error.stderr):
+                    if stream:
+                        print(stream.decode(errors="replace"), file=sys.stderr, end="")
+                print(f"FAIL: Search security smoke timed out; reports={Handler.results!r}", file=sys.stderr)
                 return 1
             print(run.stdout, end="")
             print(run.stderr, end="", file=sys.stderr)
-            result = Handler.results[-1] if len(Handler.results) == attempt else None
+            results = Handler.results[(attempt - 1) * 2:]
             if run.returncode != 0 or "PASS: Search security boundary checks" not in run.stdout:
-                print(f"Fixture result: {result!r}", file=sys.stderr)
+                print(f"Fixture result: {results!r}", file=sys.stderr)
                 print("FAIL: Search did not confirm boundary checks", file=sys.stderr)
                 return 1
-            if not isinstance(result, dict) or result.get("ipc") is not False or result.get("popup") is not False:
-                print(f"FAIL: fixture boundary result {result!r}", file=sys.stderr)
+            if len(results) != 2:
+                print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
                 return 1
-            permission_results = (result.get("camera"), result.get("geolocation"))
-            if "granted" in permission_results or "timeout" in permission_results or "denied" not in permission_results:
-                print(f"FAIL: sensitive permission denial unverified: {result!r}", file=sys.stderr)
-                return 1
-            if result.get("previousCookie") or result.get("previousStorage") is not None:
-                print(f"FAIL: temporary data survived process start: {result!r}", file=sys.stderr)
-                return 1
+            for result in results:
+                if not isinstance(result, dict) or result.get("ipc") is not False or result.get("popup") is not False:
+                    print(f"FAIL: fixture boundary result {result!r}", file=sys.stderr)
+                    return 1
+                permission_results = {
+                    name: result.get(name) for name in ("camera", "microphone", "geolocation")
+                }
+                print(f"Permission results: {permission_results}")
+                if (
+                    any(
+                        value not in ("denied", "unavailable")
+                        and not (name != "geolocation" and isinstance(value, str) and value.startswith("media-error:"))
+                        for name, value in permission_results.items()
+                    )
+                    or "denied" not in permission_results.values()
+                ):
+                    print(f"FAIL: sensitive permission denial unverified: {result!r}", file=sys.stderr)
+                    return 1
+                if result.get("wroteCookie") is not True or result.get("wroteStorage") is not True:
+                    print(f"FAIL: fixture did not seed temporary data: {result!r}", file=sys.stderr)
+                    return 1
+                if (
+                    result.get("previousCookie") != ""
+                    or "previousStorage" not in result
+                    or result["previousStorage"] is not None
+                ):
+                    print(f"FAIL: temporary data visible from another tab or process: {result!r}", file=sys.stderr)
+                    return 1
         print(f"PASS: fixture saw no IPC/popup/permission grant or retained cookie/localStorage; download requests={Handler.downloads}")
         return 0
     finally:
