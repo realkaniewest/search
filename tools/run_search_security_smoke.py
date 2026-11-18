@@ -139,7 +139,11 @@ def main():
                 if result.get("wroteCookie") is not True or result.get("wroteStorage") is not True:
                     print(f"FAIL: fixture did not seed temporary data: {result!r}", file=sys.stderr)
                     return 1
-                if result.get("previousCookie") or result.get("previousStorage") is not None:
+                if (
+                    result.get("previousCookie") != ""
+                    or "previousStorage" not in result
+                    or result["previousStorage"] is not None
+                ):
                     print(f"FAIL: temporary data visible from another tab or process: {result!r}", file=sys.stderr)
                     return 1
         print(f"PASS: fixture saw no IPC/popup/permission grant or retained cookie/localStorage; download requests={Handler.downloads}")
