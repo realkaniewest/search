@@ -5,13 +5,36 @@
 <style>
   :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; background: #202021; color: #f2f2f2; }
+  body { margin: 0; min-height: 100vh; background: radial-gradient(ellipse at 26% 0%, #292c33 0%, #202123 49%, #1d1e20 100%); color: #f2f2f2; }
   main { width: min(860px, calc(100vw - 72px)); margin: clamp(44px, 8vh, 90px) auto 64px; }
   h1 { margin: 0 0 18px; font-size: 22px; line-height: 1.15; letter-spacing: -.035em; font-weight: 650; }
   .sites { display: grid; grid-template-columns: repeat(3, 76px); gap: 16px; }
   .site { display: flex; align-items: center; flex-direction: column; gap: 7px; min-width: 0; color: #e9e9ea; font-size: 12px; text-decoration: none; }
   .icon { width: 64px; height: 64px; display: grid; place-items: center; border-radius: 16px; background: #ffffff15; color: #fff; font-size: 23px; font-weight: 650; letter-spacing: -.06em; box-shadow: inset 0 1px #ffffff22, 0 7px 22px #00000020; }
-  .site:hover .icon { background: #ffffff24; }
+  .site { --tile-tint: #c0a48e; }
+  .site:nth-child(2) { --tile-tint: #c6cedb; }
+  .site:nth-child(3) { --tile-tint: #b4acd9; }
+  .icon {
+    color: var(--tile-tint);
+    background: linear-gradient(155deg, #ffffff17, #ffffff05);
+    border: 1px solid #ffffff16;
+    box-shadow: inset 0 1px #ffffff13, 0 4px 12px #00000028;
+  }
+  .site:hover .icon, .site:focus-visible .icon {
+    border-color: #ffffff37;
+    background-color: #ffffff0d;
+    box-shadow: inset 0 1px #ffffff20, 0 7px 15px #00000033;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    main { animation: start-in 240ms ease-out both; }
+    .icon { transition: transform 160ms ease-out, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease; }
+    .site:hover .icon, .site:focus-visible .icon { transform: translateY(-3px); }
+    .site:active .icon { transform: scale(.95); }
+    @keyframes start-in {
+      from { opacity: .5; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  }
   .site:focus-visible { outline: 2px solid #d0d0d2; outline-offset: 7px; border-radius: 9px; }
   .caption { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .note { margin-top: 36px; color: #99999c; font-size: 13px; line-height: 1.5; }
