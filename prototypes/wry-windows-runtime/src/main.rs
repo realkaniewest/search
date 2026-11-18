@@ -60,7 +60,6 @@ fn main() {
         .with_additional_browser_args("")
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
         .with_download_started_handler(|_, _| false)
-        .with_navigation_handler(move |url| url == "about:blank" || target == Some(url.as_str()))
         .with_document_title_changed_handler(move |title| {
             if target.is_none() && title == READY_TITLE {
                 eprintln!("TITLE {READY_TITLE}");
@@ -74,7 +73,15 @@ fn main() {
                 Err(error) => eprintln!("WebView2 version unavailable: {error}"),
             }
             eprintln!("Manual observation required: {url}");
-            builder.with_url(url)
+            builder
+                .with_navigation_handler(move |destination| {
+                    let allowed = destination == "about:blank" || destination == url;
+                    if !allowed {
+                        eprintln!("Probe rejected a navigation outside the selected test URL");
+                    }
+                    allowed
+                })
+                .with_url(url)
         }
         None => builder.with_html(HTML),
     };
