@@ -10,6 +10,10 @@ class Element {
     this.attributes = new Map();
     this.listeners = new Map();
     this.value = '';
+    this.clientWidth = this.scrollWidth = 500;
+    this.offsetWidth = 24;
+    this.scrollLeft = 0;
+    this.hidden = true;
   }
   set innerHTML(_value) { assert.fail('chrome must build DOM nodes without HTML injection'); }
   append(...children) { this.children.push(...children); }
@@ -20,6 +24,10 @@ class Element {
   focus() { document.activeElement = this; }
   blur() { document.activeElement = null; }
   select() {}
+  scrollBy({left}) {
+    this.scrollLeft = Math.max(0, Math.min(this.scrollLeft + left, this.scrollWidth - this.clientWidth));
+    this.dispatch('scroll');
+  }
   scrollIntoView(options) { this.scrolledWith = options; }
   closest(selector) { return selector === '[role="tab"]' && this.getAttribute('role') === 'tab' ? this : null; }
   querySelector(selector) {
@@ -46,7 +54,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -58,7 +66,12 @@ const window = { ipc: { postMessage: message => messages.push(JSON.parse(message
 const html = readFileSync(new URL('./src/chrome.html', import.meta.url), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, 'Search chrome script exists');
-runInNewContext(script, { document, window, Number, JSON, TextEncoder });
+let resizeTabs;
+class ResizeObserver {
+  constructor(callback) { resizeTabs = callback; }
+  observe() {}
+}
+runInNewContext(script, { document, window, Number, JSON, TextEncoder, ResizeObserver });
 
 const tabs = elements.get('tabs');
 window.renderSearch({active: 0, tabs: [
@@ -91,7 +104,22 @@ window.renderSearch({active: 1, tabs: [
   {id: 10, label: 'Новая вкладка', url: 'search:start', loading: false},
   {id: 11, label: 'Rust Programming Language', url: 'https://rust-lang.org/', loading: false},
 ]});
-assert.equal(tabs.children[1].children[0].scrolledWith.inline, 'nearest', 'active tab stays visible after title update');
+assert.equal(tabs.children[1].children[0].scrolledWith, undefined, 'title updates do not reset manual scrolling');
+const left = elements.get('tabs-left');
+const right = elements.get('tabs-right');
+tabs.scrollWidth = 900;
+resizeTabs();
+assert.equal(left.hidden, false);
+assert.equal(left.disabled, true);
+assert.equal(right.disabled, false);
+right.dispatch('click');
+assert.equal(right.disabled, true);
+left.dispatch('click');
+assert.equal(left.disabled, true);
+tabs.scrollWidth = tabs.clientWidth;
+resizeTabs();
+assert.equal(left.hidden, true);
+assert.equal(right.hidden, true);
 window.renderSearch({active: 0, tabs: [
   {id: 10, label: 'Новая вкладка', url: 'search:start', loading: false},
   {id: 11, label: 'Rust', url: 'https://rust-lang.org/', loading: false},
