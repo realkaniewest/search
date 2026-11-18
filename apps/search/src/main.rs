@@ -3,11 +3,12 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use serde::{Deserialize, Serialize};
+use std::rc::Rc;
 use std::{
     env, process,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::Duration,
@@ -79,6 +80,7 @@ enum Command {
 #[derive(Debug)]
 enum AppEvent {
     ChromeReady,
+    StartLink { id: u64, url: String },
     ContentStarted { id: u64, url: String },
     ContentLoaded { id: u64, url: String },
     ContentTitle { id: u64, title: String },
@@ -214,7 +216,7 @@ struct Tab {
     has_start_entry: bool,
     pending_start_return: bool,
     start_forward_url: Option<String>,
-    view: WebView,
+    view: Rc<WebView>,
     local_navigation: Arc<AtomicBool>,
 }
 
@@ -301,10 +303,10 @@ fn create_content(
     id: u64,
     proxy: tao::event_loop::EventLoopProxy<AppEvent>,
     counts: Arc<SecurityCounts>,
-    initial: (Page, &str),
+    initial: (Page, &str, Option<Arc<AtomicU64>>),
     rect: Rect,
 ) -> wry::Result<(WebView, Arc<AtomicBool>)> {
-    let (page, initial_url) = initial;
+    let (page, initial_url, shared_start) = initial;
     let local_navigation = Arc::new(AtomicBool::new(matches!(page, Page::LocalFixture)));
     let policy = local_navigation.clone();
     let permission_counts = counts.clone();
@@ -332,6 +334,17 @@ fn create_content(
             NewWindowResponse::Deny
         })
         .with_navigation_handler(move |target| {
+            if let Some(selection) = &shared_start {
+                if [Page::Rust, Page::Wikipedia, Page::Excalidraw]
+                    .iter()
+                    .any(|site| site.url() == target)
+                {
+                    let id = selection.load(Ordering::Relaxed);
+                    let _ = fixture_proxy.send_event(AppEvent::StartLink { id, url: target });
+                    return false;
+                }
+                return target == "about:blank";
+            }
             let allowed = permits_content_navigation(&target, &policy);
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
                 eprintln!("content navigation allowed={allowed}");
@@ -481,6 +494,7 @@ fn main() {
     } else {
         Page::Start
     };
+    let start_selection = (mode != Mode::SecuritySmoke).then(|| Arc::new(AtomicU64::new(1)));
     #[cfg(target_os = "linux")]
     let (first, local_navigation) = create_content(
         &window,
@@ -488,7 +502,7 @@ fn main() {
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        (initial_page, initial_page.url()),
+        (initial_page, initial_page.url(), start_selection.clone()),
         content_rect,
     )
     .expect("Search start page failed");
@@ -498,10 +512,13 @@ fn main() {
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        (initial_page, initial_page.url()),
+        (initial_page, initial_page.url(), start_selection.clone()),
         content_rect,
     )
     .expect("Search start page failed");
+    let first = Rc::new(first);
+    let shared_start =
+        (mode != Mode::SecuritySmoke).then(|| (first.clone(), local_navigation.clone()));
     let mut tabs = vec![Tab {
         id: 1,
         page: initial_page,
@@ -525,7 +542,17 @@ fn main() {
     event_loop.run(move |event, _, control_flow| {
         let _keep_window_alive = &window;
         *control_flow = ControlFlow::Wait;
-        match event {
+        let command_from_start = match event {
+            Event::UserEvent(AppEvent::StartLink { id, url }) => {
+                if id == tabs[active].id && shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view)) {
+                    Event::UserEvent(AppEvent::Command(Command::Open { value: url }))
+                } else {
+                    return;
+                }
+            }
+            event => event,
+        };
+        match command_from_start {
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if mode == Mode::Smoke { println!("SMOKE: chrome loaded"); }
                 chrome_ready = true;
@@ -631,6 +658,9 @@ fn main() {
                         } else {
                             Page::Start
                         };
+                        let new_view = if let Some((view, policy)) = &shared_start {
+                            Ok((view.clone(), policy.clone()))
+                        } else {
                         #[cfg(target_os = "linux")]
                         let new_view = create_content(
                             &window,
@@ -638,7 +668,7 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            (page, page.url()),
+                            (page, page.url(), None),
                             rect,
                         );
                         #[cfg(not(target_os = "linux"))]
@@ -647,14 +677,19 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            (page, page.url()),
+                            (page, page.url(), None),
                             rect,
                         );
+                        new_view.map(|(view, policy)| (Rc::new(view), policy))
+                        };
                         if mode == Mode::SecuritySmoke {
                             eprintln!("SECURITY: second WebView created={}", new_view.is_ok());
                         }
                         if let Ok((view, local_navigation)) = new_view {
-                            let _ = tabs[active].view.set_visible(false);
+                            if !Rc::ptr_eq(&tabs[active].view, &view) {
+                                let _ = tabs[active].view.set_visible(false);
+                                let _ = view.set_visible(true);
+                            }
                             tabs.push(Tab {
                                 id: next_id,
                                 page,
@@ -678,42 +713,51 @@ fn main() {
                         notice = Some("Открыто 12 вкладок. Закрой одну, чтобы открыть новую.");
                     }
                     Command::Select { index } if index < tabs.len() && index != active => {
-                        let _ = tabs[active].view.set_visible(false);
+                        if !Rc::ptr_eq(&tabs[active].view, &tabs[index].view) {
+                            let _ = tabs[active].view.set_visible(false);
+                            let _ = tabs[index].view.set_visible(true);
+                        }
                         active = index;
-                        let _ = tabs[active].view.set_visible(true);
                     }
                     Command::Close { index } if index < tabs.len() => {
                         if tabs.len() > 1 {
-                            tabs.remove(index);
+                            let removed = tabs.remove(index);
                             if index < active {
                                 active -= 1;
                             } else if index == active {
                                 active = active.min(tabs.len() - 1);
-                                let _ = tabs[active].view.set_visible(true);
+                                if !Rc::ptr_eq(&removed.view, &tabs[active].view) {
+                                    let _ = removed.view.set_visible(false);
+                                    let _ = tabs[active].view.set_visible(true);
+                                }
                             }
                         }
                     }
                     Command::Open { value } => {
                         if let Some((page, url)) = page_from_input(&value) {
-                            let result = if matches!(page, Page::LocalFixture) {
+                            let is_shared = shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view));
+                            let result = if is_shared && matches!(page, Page::Start) {
+                                Ok(())
+                            } else if is_shared || matches!(page, Page::LocalFixture) {
                                 let (_, rect) = bounds(&window);
                                 #[cfg(target_os = "linux")]
                                 let local_view = create_content(
                                     &window, &fixed, next_id, content_proxy.clone(),
-                                    security_counts.clone(), (page, &url), rect,
+                                    security_counts.clone(), (page, &url, None), rect,
                                 );
                                 #[cfg(not(target_os = "linux"))]
                                 let local_view = create_content(
                                     &window, next_id, content_proxy.clone(),
-                                    security_counts.clone(), (page, &url), rect,
+                                    security_counts.clone(), (page, &url, None), rect,
                                 );
                                 local_view.map(|(view, local_navigation)| {
                                     let tab = &mut tabs[active];
                                     tab.id = next_id;
                                     next_id += 1;
-                                    tab.view = view;
+                                    let _ = tab.view.set_visible(false);
+                                    tab.view = Rc::new(view);
                                     tab.local_navigation = local_navigation;
-                                    tab.has_start_entry = false;
+                                    tab.has_start_entry = is_shared && !matches!(page, Page::LocalFixture);
                                 })
                             } else {
                                 let tab = &tabs[active];
@@ -796,6 +840,9 @@ fn main() {
                     }
                     _ => {}
                 }
+                if let Some(selection) = &start_selection {
+                    selection.store(tabs[active].id, Ordering::Relaxed);
+                }
                 if chrome_ready {
                     sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                 }
@@ -806,8 +853,13 @@ fn main() {
             } => {
                 let (chrome_rect, content_rect) = bounds(&window);
                 let _ = chrome.set_bounds(chrome_rect);
+                if let Some((view, _)) = &shared_start {
+                    let _ = view.set_bounds(content_rect);
+                }
                 for tab in &tabs {
-                    let _ = tab.view.set_bounds(content_rect);
+                    if !shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tab.view)) {
+                        let _ = tab.view.set_bounds(content_rect);
+                    }
                 }
             }
             Event::WindowEvent {
