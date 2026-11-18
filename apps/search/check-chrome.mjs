@@ -199,4 +199,20 @@ window.renderSearch({
 });
 assert.equal(address.value, 'https://rust-lang.org/learn', 'replacement tab clears previous address draft');
 
+const firstId = {id: 10, label: 'Начало', url: 'search:start'};
+const secondId = {id: 11, label: 'Rust', url: 'https://rust-lang.org/'};
+const thirdId = {id: 12, label: 'Wikipedia', url: 'https://www.wikipedia.org/'};
+window.renderSearch({active: 1, tabs: [firstId, secondId, thirdId]});
+tabs.children[1].children[1].focus();
+window.renderSearch({active: 0, tabs: [secondId, thirdId]});
+assert.equal(document.activeElement, tabs.children[0].children[1], 'focus follows the surviving tab ID');
+window.renderSearch({active: 0, tabs: [thirdId]});
+assert.equal(document.activeElement, tabs.children[0].children[0], 'removed close button yields focus to selected tab');
+
+window.renderSearch({active: 1, tabs: [firstId, secondId, thirdId]});
+address.focus();
+address.value = 'editing current tab';
+window.renderSearch({active: 0, tabs: [secondId, thirdId]});
+assert.equal(address.value, 'editing current tab', 'closing a preceding tab preserves the active draft');
+
 console.log('Search chrome keyboard and tab controls passed');

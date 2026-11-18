@@ -98,7 +98,7 @@
   });
   const displayAddress = url => url === 'search:start' ? '' : url ?? '';
   window.searchState = {active:0,tabs:[]};
-  function renderTabs(state, activeChanged) {
+  function renderTabs(state, previous, activeChanged) {
     const focused = document.activeElement;
     const focusedIndex = focused?.dataset?.index;
     const focusedAction = focused?.dataset?.action;
@@ -114,21 +114,29 @@
     });
     tabs.querySelector(`[role="tab"][data-index="${state.active}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
     if(focusedIndex!==undefined && state.tabs.length) {
-      const index=Math.min(Number(focusedIndex),state.tabs.length-1);
-      tabs.querySelector(`[data-action="${focusedAction}"][data-index="${index}"]`)?.focus();
+      const previousIndex = Number(focusedIndex);
+      const previousId = previous.tabs[previousIndex]?.id;
+      const remainingIndex = previousId === undefined ? previousIndex
+        : state.tabs.findIndex(tab => tab.id === previousId);
+      const remaining = remainingIndex >= 0 && remainingIndex < state.tabs.length;
+      const index = remaining ? remainingIndex : state.active;
+      const action = remaining ? focusedAction : 'select';
+      tabs.querySelector(`[data-action="${action}"][data-index="${index}"]`)?.focus();
     }
   }
   window.renderSearch = state => {
     const previous = window.searchState;
-    const activeChanged = state.active !== previous.active
-      || state.tabs[state.active]?.id !== previous.tabs[previous.active]?.id;
-    const tabsChanged = activeChanged || state.tabs.length !== previous.tabs.length
+    const currentId = state.tabs[state.active]?.id;
+    const previousId = previous.tabs[previous.active]?.id;
+    const activeChanged = currentId === undefined && previousId === undefined
+      ? state.active !== previous.active : currentId !== previousId;
+    const tabsChanged = activeChanged || state.active !== previous.active || state.tabs.length !== previous.tabs.length
       || state.tabs.some((tab, index) => {
         const before = previous.tabs[index];
         return tab.id !== before.id || tab.label !== before.label || tab.loading !== before.loading;
       });
     window.searchState = state;
-    if (tabsChanged) renderTabs(state, activeChanged);
+    if (tabsChanged) renderTabs(state, previous, activeChanged);
 
     const activeTab = state.tabs[state.active];
     document.getElementById('reload').disabled = !activeTab || activeTab.url === 'search:start';
