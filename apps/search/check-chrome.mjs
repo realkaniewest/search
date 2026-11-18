@@ -87,6 +87,11 @@ window.renderSearch({active: 0, tabs: [
 ]});
 assert.equal(tabs.children.length, 2);
 const shortcut = options => document.keydown({preventDefault() {}, ...options});
+shortcut({metaKey: true, shiftKey: true, key: 'T'});
+assert.deepEqual(messages.pop(), {type: 'reopen'});
+shortcut({ctrlKey: true, key: 't'});
+assert.deepEqual(messages.pop(), {type: 'new'});
+
 tabs.children[0].children[0].focus();
 shortcut({ctrlKey: true, key: 'Tab'});
 assert.deepEqual(messages.pop(), {type: 'select', id: 11});

@@ -69,6 +69,7 @@ impl SecurityCounts {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Command {
     New,
+    Reopen,
     Select {
         id: u64,
     },
@@ -560,6 +561,7 @@ fn main() {
         local_navigation,
     }];
     let mut active = 0usize;
+    let mut last_closed = None::<(Page, String)>;
     let mut next_id = 2u64;
     let mut chrome_ready = false;
     let mut content_ready = false;
@@ -689,14 +691,24 @@ fn main() {
                 notice = None;
                 attempted_address = None;
                 match command {
-                    Command::New if tabs.len() < MAX_TABS => {
+                    Command::Reopen if last_closed.is_none() => {
+                        notice = Some("Нет недавно закрытой вкладки.");
+                    }
+                    Command::New | Command::Reopen if tabs.len() < MAX_TABS => {
                         let (_, rect) = bounds(&window);
                         let page = if mode == Mode::SecuritySmoke {
                             Page::LocalFixture
                         } else {
                             Page::Start
                         };
-                        let new_view = if let Some((view, policy)) = &shared_start {
+                        let restoring = matches!(command, Command::Reopen);
+                        let (page, url) = if restoring {
+                            last_closed.as_ref().map_or((page, page.url()), |(page, url)| (*page, url.as_str()))
+                        } else {
+                            (page, page.url())
+                        };
+                        let shared = shared_start.as_ref().filter(|_| matches!(page, Page::Start));
+                        let new_view = if let Some((view, policy)) = shared {
                             Ok((view.clone(), policy.clone()))
                         } else {
                         #[cfg(target_os = "linux")]
@@ -706,7 +718,7 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            (page, page.url(), None),
+                            (page, url, None),
                             rect,
                         );
                         #[cfg(not(target_os = "linux"))]
@@ -715,7 +727,7 @@ fn main() {
                             next_id,
                             content_proxy.clone(),
                             security_counts.clone(),
-                            (page, page.url(), None),
+                            (page, url, None),
                             rect,
                         );
                         new_view.map(|(view, policy)| (Rc::new(view), policy))
@@ -731,9 +743,9 @@ fn main() {
                             tabs.push(Tab {
                                 id: next_id,
                                 page,
-                                display_url: page.url().to_owned(),
+                                display_url: url.to_owned(),
                                 title: page.label().to_owned(),
-                                loading: false,
+                                loading: restoring && !matches!(page, Page::Start),
                                 has_start_entry: matches!(page, Page::Start),
                                 pending_start_return: false,
                                 start_forward_url: None,
@@ -742,12 +754,17 @@ fn main() {
                             });
                             active = tabs.len() - 1;
                             next_id += 1;
+                            if restoring {
+                                last_closed = None;
+                            }
                             if mode == Mode::SecuritySmoke {
                                 eprintln!("SECURITY: second WebView active");
                             }
+                        } else {
+                            notice = Some("Не удалось открыть вкладку.");
                         }
                     }
-                    Command::New => {
+                    Command::New | Command::Reopen => {
                         notice = Some("Открыто 12 вкладок. Закрой одну, чтобы открыть новую.");
                     }
                     Command::Select { id } => {
@@ -766,6 +783,9 @@ fn main() {
                             && let Some(index) = tabs.iter().position(|tab| tab.id == id)
                         {
                             let removed = tabs.remove(index);
+                            if !matches!(removed.page, Page::LocalFixture) {
+                                last_closed = Some((removed.page, removed.display_url.clone()));
+                            }
                             if index < active {
                                 active -= 1;
                             } else if index == active {

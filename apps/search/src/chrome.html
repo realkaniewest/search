@@ -191,7 +191,7 @@
       }
       return;
     }
-    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:'new'}); }
+    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:e.shiftKey?'reopen':'new'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); editAddress(); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') {
