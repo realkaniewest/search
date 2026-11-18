@@ -46,6 +46,7 @@ enum Mode {
 
 #[derive(Default)]
 struct SecurityCounts {
+    fixture_mode: bool,
     blocked_navigation: AtomicUsize,
     blocked_popup: AtomicUsize,
     blocked_download: AtomicUsize,
@@ -310,6 +311,7 @@ fn create_content(
     let download_counts = counts.clone();
     let popup_counts = counts.clone();
     let navigation_counts = counts;
+    let fixture_proxy = proxy.clone();
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
         .with_incognito(true)
@@ -338,6 +340,15 @@ fn create_content(
                 navigation_counts
                     .blocked_navigation
                     .fetch_add(1, Ordering::SeqCst);
+                // In the two-tab smoke run, the second fixture attempts this
+                // navigation after its report reaches the local server.
+                if navigation_counts.fixture_mode
+                    && id == 2
+                    && matches!(page, Page::LocalFixture)
+                    && target == "https://blocked.invalid/"
+                {
+                    let _ = fixture_proxy.send_event(AppEvent::SecurityCheck);
+                }
             }
             allowed
         })
@@ -430,7 +441,10 @@ fn main() {
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
         });
     }
-    let security_counts = Arc::new(SecurityCounts::default());
+    let security_counts = Arc::new(SecurityCounts {
+        fixture_mode: mode == Mode::SecuritySmoke,
+        ..SecurityCounts::default()
+    });
     let ready_proxy = proxy.clone();
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
@@ -576,7 +590,7 @@ fn main() {
                     }
                 }
             }
-            Event::UserEvent(AppEvent::SecurityCheck) => {
+            Event::UserEvent(AppEvent::SecurityCheck) if mode == Mode::SecuritySmoke => {
                 let (nav, popup, download, permission) = security_counts.snapshot();
                 let title_verified = tabs
                     .first()
@@ -587,7 +601,10 @@ fn main() {
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
                     if tabs.len() == 1 && active == 0 {
                         let _ = content_proxy.send_event(AppEvent::Command(Command::New));
-                    } else if tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title) {
+                    } else if nav >= 2
+                        && download >= 2
+                        && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
+                    {
                         println!("PASS: Search security boundary checks");
                         *control_flow = ControlFlow::ExitWithCode(0);
                     } else {
