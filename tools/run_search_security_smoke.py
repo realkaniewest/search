@@ -14,7 +14,7 @@ PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</titl
 <body><h1>Search security fixture</h1><script>
 (async () => {{
   const result = {{ipc: typeof window.ipc !== 'undefined', popup: false,
-    camera: 'unavailable', geolocation: 'unavailable',
+    camera: 'unavailable', microphone: 'unavailable', geolocation: 'unavailable',
     previousCookie: document.cookie, previousStorage: localStorage.getItem('search_probe')}};
   document.cookie = 'search_probe=stored; SameSite=Lax';
   localStorage.setItem('search_probe', 'stored');
@@ -22,15 +22,29 @@ PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</titl
   const link = document.createElement('a'); link.href = '/download'; link.download = 'blocked.txt';
   document.body.append(link); link.click();
   if (navigator.mediaDevices?.getUserMedia) {{
-    result.camera = await Promise.race([
-      navigator.mediaDevices.getUserMedia({{audio: true, video: true}})
-        .then(() => 'granted', () => 'denied'),
-      new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
-    ]);
+    async function checkMedia(constraints) {{
+      return Promise.race([
+        navigator.mediaDevices.getUserMedia(constraints).then(stream => {{
+          stream.getTracks().forEach(track => track.stop());
+          return 'granted';
+        }}, error => error.name === 'NotAllowedError' || error.name === 'SecurityError'
+          ? 'denied' : error.name === 'NotFoundError' ? 'no-device' : 'error'),
+        new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+      ]);
+    }}
+    result.camera = await checkMedia({{video: true}});
+    result.microphone = await checkMedia({{audio: true}});
   }}
   if (navigator.geolocation) {{
-    result.geolocation = await new Promise(resolve => navigator.geolocation.getCurrentPosition(
-      () => resolve('granted'), () => resolve('denied'), {{timeout: 2500}}));
+    result.geolocation = await Promise.race([
+      new Promise(resolve => navigator.geolocation.getCurrentPosition(
+        () => resolve('granted'),
+        error => resolve(error.code === 1 ? 'denied'
+          : error.code === 2 ? 'unavailable' : error.code === 3 ? 'timeout' : 'error'),
+        {{timeout: 2500}}
+      )),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+    ]);
   }}
   await fetch('/results', {{method:'POST', headers:{{'content-type':'application/json'}}, body:JSON.stringify(result)}});
   setTimeout(() => {{ location.href = 'https://blocked.invalid/'; }}, 100);
@@ -102,8 +116,14 @@ def main():
             if not isinstance(result, dict) or result.get("ipc") is not False or result.get("popup") is not False:
                 print(f"FAIL: fixture boundary result {result!r}", file=sys.stderr)
                 return 1
-            permission_results = (result.get("camera"), result.get("geolocation"))
-            if "granted" in permission_results or "timeout" in permission_results or "denied" not in permission_results:
+            permission_results = {
+                name: result.get(name) for name in ("camera", "microphone", "geolocation")
+            }
+            print(f"Permission results: {permission_results}")
+            if (
+                any(value not in ("denied", "unavailable", "no-device") for value in permission_results.values())
+                or "denied" not in permission_results.values()
+            ):
                 print(f"FAIL: sensitive permission denial unverified: {result!r}", file=sys.stderr)
                 return 1
             if result.get("previousCookie") or result.get("previousStorage") is not None:
