@@ -336,6 +336,13 @@ fn create_content(
     build_view(builder, window)
 }
 
+fn send_security_checkpoint(proxy: &tao::event_loop::EventLoopProxy<AppEvent>, round: u8) {
+    eprintln!("SECURITY: dispatch checkpoint {round}");
+    if proxy.send_event(AppEvent::SecurityCheck).is_err() {
+        eprintln!("SECURITY: event loop closed before checkpoint {round}");
+    }
+}
+
 fn main() {
     let mode = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [] => Mode::Normal,
@@ -378,9 +385,9 @@ fn main() {
         thread::spawn(move || {
             if mode == Mode::SecuritySmoke {
                 thread::sleep(Duration::from_secs(12));
-                let _ = timer_proxy.send_event(AppEvent::SecurityCheck);
+                send_security_checkpoint(&timer_proxy, 1);
                 thread::sleep(Duration::from_secs(12));
-                let _ = timer_proxy.send_event(AppEvent::SecurityCheck);
+                send_security_checkpoint(&timer_proxy, 2);
                 thread::sleep(Duration::from_secs(10));
             } else {
                 thread::sleep(Duration::from_secs(25));
@@ -584,6 +591,9 @@ fn main() {
                             page,
                             rect,
                         );
+                        if mode == Mode::SecuritySmoke {
+                            eprintln!("SECURITY: second WebView created={}", new_view.is_ok());
+                        }
                         if let Ok(view) = new_view {
                             let _ = tabs[active].view.set_visible(false);
                             tabs.push(Tab {
@@ -598,6 +608,9 @@ fn main() {
                             });
                             active = tabs.len() - 1;
                             next_id += 1;
+                            if mode == Mode::SecuritySmoke {
+                                eprintln!("SECURITY: second WebView active");
+                            }
                         }
                     }
                     Command::Select { index } if index < tabs.len() => {
