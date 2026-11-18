@@ -33,7 +33,7 @@ use wry::WebViewBuilderExtUnix;
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
 
-const CHROME_HEIGHT: f64 = 64.0;
+const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
 const MAX_TABS: usize = 12;
 
@@ -345,10 +345,13 @@ fn main() {
         }
     };
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
-    let window = WindowBuilder::new()
+    let window_builder = WindowBuilder::new()
         .with_title("Search")
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
-        .with_min_inner_size(LogicalSize::new(680.0, 420.0))
+        .with_min_inner_size(LogicalSize::new(680.0, 420.0));
+    #[cfg(target_os = "macos")]
+    let window_builder = window_builder.with_transparent(true);
+    let window = window_builder
         .build(&event_loop)
         .expect("Search window creation failed");
     #[cfg(target_os = "linux")]
@@ -394,6 +397,8 @@ fn main() {
                 let _ = ready_proxy.send_event(AppEvent::ChromeReady);
             }
         });
+    #[cfg(target_os = "macos")]
+    let chrome_builder = chrome_builder.with_transparent(true);
     #[cfg(target_os = "windows")]
     let chrome_builder = chrome_builder.with_additional_browser_args("");
     #[cfg(target_os = "linux")]
