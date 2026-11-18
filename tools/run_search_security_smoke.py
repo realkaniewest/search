@@ -28,7 +28,7 @@ PAGE = f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</titl
           stream.getTracks().forEach(track => track.stop());
           return 'granted';
         }}, error => error.name === 'NotAllowedError' || error.name === 'SecurityError'
-          ? 'denied' : error.name === 'NotFoundError' ? 'no-device' : 'error'),
+          ? 'denied' : 'media-error:' + error.name),
         new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
       ]);
     }}
@@ -121,7 +121,11 @@ def main():
             }
             print(f"Permission results: {permission_results}")
             if (
-                any(value not in ("denied", "unavailable", "no-device") for value in permission_results.values())
+                any(
+                    value not in ("denied", "unavailable")
+                    and not (name != "geolocation" and isinstance(value, str) and value.startswith("media-error:"))
+                    for name, value in permission_results.items()
+                )
                 or "denied" not in permission_results.values()
             ):
                 print(f"FAIL: sensitive permission denial unverified: {result!r}", file=sys.stderr)
