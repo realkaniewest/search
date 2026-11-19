@@ -82,12 +82,38 @@ enum Command {
     },
     Open {
         value: String,
+        #[serde(default)]
+        engine: SearchEngine,
     },
     #[serde(rename = "cancel-address")]
     CancelAddress,
     Back,
     Forward,
     Reload,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SearchEngine {
+    #[default]
+    Google,
+    Yandex,
+    DuckDuckGo,
+    Bing,
+}
+
+impl SearchEngine {
+    fn search(self, query: &str) -> Option<Url> {
+        let (endpoint, parameter) = match self {
+            Self::Google => ("https://www.google.com/search", "q"),
+            Self::Yandex => ("https://ya.ru/search/", "text"),
+            Self::DuckDuckGo => ("https://duckduckgo.com/", "q"),
+            Self::Bing => ("https://www.bing.com/search", "q"),
+        };
+        let mut url = Url::parse(endpoint).ok()?;
+        url.query_pairs_mut().append_pair(parameter, query);
+        Some(url)
+    }
 }
 
 #[derive(Debug)]
@@ -192,6 +218,44 @@ fn preview_url(raw: &str) -> Option<(Page, Url)> {
     })
 }
 
+fn preview_destination(raw: &str, engine: SearchEngine) -> Option<(Page, String)> {
+    let input = raw.trim();
+    if input == Page::Start.url() {
+        return Some((Page::Start, Page::Start.url().to_owned()));
+    }
+    if let Some((page, url)) = preview_url(input) {
+        return Some((page, url.into()));
+    }
+    if input.is_empty() || input.contains("://") || input.chars().any(char::is_control) {
+        return None;
+    }
+    let single_token = !input.chars().any(char::is_whitespace);
+    let authority = input.split(['/', '?', '#']).next()?;
+    if single_token
+        && (authority.contains('.')
+            || authority.contains('@')
+            || input.contains(':')
+            || input.contains('\\')
+            || authority.eq_ignore_ascii_case("localhost"))
+    {
+        return preview_url(&format!("https://{input}")).map(|(page, url)| (page, url.into()));
+    }
+    let first_token = input.split_whitespace().next()?;
+    if first_token.contains('@')
+        || first_token.split_once(':').is_some_and(|(scheme, rest)| {
+            !rest.is_empty()
+                && matches!(
+                    scheme.to_ascii_lowercase().as_str(),
+                    "http" | "https" | "file" | "mailto" | "javascript" | "data"
+                )
+        })
+    {
+        return None;
+    }
+    let url = engine.search(input)?;
+    preview_url(url.as_str()).map(|(page, url)| (page, url.into()))
+}
+
 fn navigation_url(raw: &str, preview: bool) -> Option<(Page, Url)> {
     if preview {
         preview_url(raw)
@@ -222,7 +286,7 @@ fn parse_command(raw: &str) -> Option<Command> {
         return None;
     }
     let command = serde_json::from_str::<Command>(raw).ok()?;
-    if matches!(&command, Command::Open { value } if value.len() > 1024) {
+    if matches!(&command, Command::Open { value, .. } if value.len() > 1024) {
         return None;
     }
     Some(command)
@@ -636,7 +700,7 @@ fn main() {
         let command_from_start = match event {
             Event::UserEvent(AppEvent::StartLink { id, url }) => {
                 if id == tabs[active].id && shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view)) {
-                    Event::UserEvent(AppEvent::Command(Command::Open { value: url }))
+                    Event::UserEvent(AppEvent::Command(Command::Open { value: url, engine: SearchEngine::default() }))
                 } else {
                     return;
                 }
@@ -849,13 +913,9 @@ fn main() {
                             }
                         }
                     }
-                    Command::Open { value } => {
+                    Command::Open { value, engine } => {
                         let destination = if preview {
-                            if value.trim() == Page::Start.url() {
-                                Some((Page::Start, Page::Start.url().to_owned()))
-                            } else {
-                                preview_url(value.trim()).map(|(page, url)| (page, url.into()))
-                            }
+                            preview_destination(&value, engine)
                         } else {
                             page_from_input(&value)
                         };
@@ -916,7 +976,7 @@ fn main() {
                             }
                         } else {
                             notice = Some(if preview {
-                                "Введи полный HTTPS-адрес, например https://developer.mozilla.org/."
+                                "Этот адрес недоступен. Введи публичный HTTPS-адрес или поисковый запрос."
                             } else {
                                 "Пока доступны Rust, Wikipedia, Excalidraw и local."
                             });
@@ -1010,6 +1070,43 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_distinguishes_domain_search_and_unsupported_addresses() {
+        assert_eq!(
+            preview_destination("github.com", SearchEngine::Google)
+                .unwrap()
+                .1,
+            "https://github.com/"
+        );
+        for (engine, host, key) in [
+            (SearchEngine::Google, "www.google.com", "q"),
+            (SearchEngine::Yandex, "ya.ru", "text"),
+            (SearchEngine::DuckDuckGo, "duckduckgo.com", "q"),
+            (SearchEngine::Bing, "www.bing.com", "q"),
+        ] {
+            let query = "Rust & async #тест";
+            let (_, address) = preview_destination(query, engine).unwrap();
+            let address = Url::parse(&address).unwrap();
+            assert_eq!(address.host_str(), Some(host));
+            assert_eq!(
+                address.query_pairs().collect::<Vec<_>>(),
+                vec![(key.into(), query.into())]
+            );
+        }
+        for blocked in [
+            "http://github.com/",
+            "localhost",
+            "127.0.0.1",
+            "file:///tmp/test",
+            "mailto:test@example.org trailing",
+        ] {
+            assert!(
+                preview_destination(blocked, SearchEngine::Google).is_none(),
+                "{blocked}"
+            );
+        }
+    }
 
     #[test]
     fn https_preview_accepts_new_sites_without_widening_normal_navigation() {

@@ -103,10 +103,12 @@
     @keyframes tab-appear { from { opacity: .55; } }
     @keyframes address-appear { from { opacity: 0; transform: translateY(3px) scale(.97); } }
   }
+  .search-engine { display: none; color: #e2e7ef; background: #303238; border: 1px solid #ffffff22; border-radius: 9px; padding: 4px; font: inherit; }
+  .https-preview .search-engine { display: inline-block; }
   .preview-label { display: none; }
   .https-preview .preview-label { display: inline; color: #bbc5d4; font-size: 11px; }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="preview-label">HTTPS Preview</span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><select id="search-engine" class="search-engine" aria-label="Поисковая система"><option value="google">Google</option><option value="yandex">Яндекс</option><option value="duckduckgo">DuckDuckGo</option><option value="bing">Bing</option></select><span class="preview-label">HTTPS Preview</span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" hidden aria-describedby="notice">
 <script>
   'use strict';
@@ -159,6 +161,9 @@
     }
     if(e.key!=='Enter' || !address.value.trim()) return;
     const command={type:'open',value:address.value};
+    if (document.documentElement?.classList.contains('https-preview')) {
+      command.engine = document.getElementById('search-engine').value;
+    }
     const encoder=new TextEncoder();
     if(encoder.encode(address.value).length>1024 || encoder.encode(JSON.stringify(command)).length>2048) {
       notice.textContent='Адрес слишком длинный. Сократи его и попробуй снова.';
@@ -233,7 +238,7 @@
       if (tab.url === 'search:start') {
         const hint = document.createElement('span');
         hint.className = 'hint';
-        hint.textContent = 'Адрес или сайт';
+        hint.textContent = document.documentElement?.classList.contains('https-preview') ? 'Поиск или адрес' : 'Адрес или сайт';
         hint.setAttribute('aria-hidden', 'true');
         button.append(hint);
       }
@@ -265,6 +270,7 @@
     }
   }
   window.renderSearch = state => {
+    if (document.documentElement?.classList.contains('https-preview')) address.placeholder = 'Поиск или адрес';
     const previous = window.searchState;
     const currentId = state.tabs[state.active]?.id;
     const previousId = previous.tabs[previous.active]?.id;
