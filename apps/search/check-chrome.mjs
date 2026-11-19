@@ -23,6 +23,7 @@ class Element {
     this.hidden = true;
   }
   set innerHTML(_value) { assert.fail('chrome must build DOM nodes without HTML injection'); }
+  insertBefore(child) { this.children.unshift(child); }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = [...children]; }
   setAttribute(key, value) { this.attributes.set(key, String(value)); }
@@ -62,7 +63,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'search-engine', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -298,7 +299,10 @@ const newTab = {id: 900, label: 'Новая вкладка', url: 'search:start'
 window.renderSearch({active: previousTabs.length, tabs: [...previousTabs, newTab]});
 assert.equal(document.activeElement, address, 'new tab opens its search field immediately');
 assert.equal(address.value, '', 'new tab does not reuse previous input');
-assert.ok(tabs.children.at(-1).classList.contains('composing'));
+assert.equal(elements.get('composer').hidden, false);
+assert.deepEqual(messages.pop(), {type: 'composer', visible: true});
 address.dispatch('keydown', {key: 'Escape'});
 assert.equal(address.hidden, true, 'Escape closes the composer');
+assert.equal(elements.get('composer').hidden, true);
+assert.deepEqual(messages.splice(-2), [{type: 'composer', visible: false}, {type: 'cancel-address'}]);
 assert.equal(window.searchState.tabs.at(-1).id, 900, 'Escape leaves new tab open');

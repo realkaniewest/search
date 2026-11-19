@@ -73,6 +73,9 @@ impl SecurityCounts {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Command {
     New,
+    Composer {
+        visible: bool,
+    },
     Reopen,
     Select {
         id: u64,
@@ -298,6 +301,14 @@ fn parse_command(raw: &str) -> Option<Command> {
 
 fn deny_permission(_: PermissionKind) -> PermissionResponse {
     PermissionResponse::Deny
+}
+
+fn full_window_bounds(window: &Window) -> Rect {
+    let size = window.inner_size().to_logical::<f64>(window.scale_factor());
+    Rect {
+        position: LogicalPosition::new(0.0, 0.0).into(),
+        size: size.into(),
+    }
 }
 
 fn bounds(window: &Window) -> (Rect, Rect) {
@@ -680,6 +691,7 @@ fn main() {
         local_navigation,
     }];
     let mut active = 0usize;
+    let mut composer_visible = false;
     let mut last_closed = None::<(Page, String)>;
     let mut next_id = 2u64;
     let mut chrome_ready = false;
@@ -806,6 +818,18 @@ fn main() {
             Event::UserEvent(AppEvent::TimedOut) => {
                 eprintln!("FAIL: Search first window did not load before the test deadline");
                 *control_flow = ControlFlow::ExitWithCode(1);
+            }
+            Event::UserEvent(AppEvent::Command(Command::Composer { visible })) => {
+                if preview && visible != composer_visible {
+                    let rect = if visible { full_window_bounds(&window) } else { bounds(&window).0 };
+                    if chrome.set_bounds(rect).is_ok() {
+                        composer_visible = visible;
+                        let _ = tabs[active].view.set_visible(!visible);
+                        if visible {
+                            let _ = chrome.focus();
+                        }
+                    }
+                }
             }
             Event::UserEvent(AppEvent::Command(command)) => {
                 notice = None;
@@ -1052,7 +1076,7 @@ fn main() {
                 ..
             } => {
                 let (chrome_rect, content_rect) = bounds(&window);
-                let _ = chrome.set_bounds(chrome_rect);
+                let _ = chrome.set_bounds(if composer_visible { full_window_bounds(&window) } else { chrome_rect });
                 if let Some((view, _)) = &shared_start {
                     let _ = view.set_bounds(content_rect);
                 }
