@@ -19,7 +19,7 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder},
     window::{Window, WindowBuilder},
 };
-use url::Url;
+use url::{Host, Url};
 use wry::{
     NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse, Rect, WebView,
     WebViewBuilder,
@@ -37,17 +37,21 @@ use wry::WebViewBuilderExtWindows;
 const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
 const MAX_TABS: usize = 12;
+const HAS_HTTPS_PREVIEW: bool = cfg!(all(target_os = "macos", debug_assertions))
+    && option_env!("SEARCH_BUILD_HTTPS_PREVIEW").is_some();
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Mode {
     Normal,
     Smoke,
     SecuritySmoke,
+    HttpsPreview,
 }
 
 #[derive(Default)]
 struct SecurityCounts {
     fixture_mode: bool,
+    https_preview: bool,
     blocked_navigation: AtomicUsize,
     blocked_popup: AtomicUsize,
     blocked_download: AtomicUsize,
@@ -106,6 +110,7 @@ enum Page {
     Wikipedia,
     Excalidraw,
     LocalFixture,
+    Web,
 }
 
 impl Page {
@@ -116,6 +121,7 @@ impl Page {
             Self::Wikipedia => "Wikipedia",
             Self::Excalidraw => "Excalidraw",
             Self::LocalFixture => "Локальная страница",
+            Self::Web => "HTTPS",
         }
     }
 
@@ -126,6 +132,7 @@ impl Page {
             Self::Wikipedia => "https://www.wikipedia.org/",
             Self::Excalidraw => "https://excalidraw.com/",
             Self::LocalFixture => "http://127.0.0.1:43127/",
+            Self::Web => "about:blank",
         }
     }
 }
@@ -155,6 +162,42 @@ fn validated_url(raw: &str) -> Option<(Page, Url)> {
         _ => None,
     }?;
     Some((page, url))
+}
+
+fn preview_url(raw: &str) -> Option<(Page, Url)> {
+    let (scheme, rest) = raw.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if !scheme.eq_ignore_ascii_case("https")
+        || authority.is_empty()
+        || authority.contains('@')
+        || raw.contains('\\')
+        || raw.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return None;
+    }
+    let url = Url::parse(raw).ok()?;
+    let Host::Domain(host) = url.host()? else {
+        return None;
+    };
+    let host = host.trim_end_matches('.');
+    (url.port_or_known_default() == Some(443)
+        && host.contains('.')
+        && !host.ends_with(".localhost")
+        && !host.ends_with(".local"))
+    .then(|| {
+        (
+            validated_url(url.as_str()).map_or(Page::Web, |(page, _)| page),
+            url,
+        )
+    })
+}
+
+fn navigation_url(raw: &str, preview: bool) -> Option<(Page, Url)> {
+    if preview {
+        preview_url(raw)
+    } else {
+        validated_url(raw)
+    }
 }
 
 fn allowed_url(raw: &str) -> Option<Page> {
@@ -236,11 +279,14 @@ impl Tab {
     }
 }
 
-fn loaded_page(url: &str, pending_start_return: bool) -> Option<(Page, String)> {
+fn loaded_page(url: &str, pending_start_return: bool, preview: bool) -> Option<(Page, String)> {
     if url == "about:blank" && pending_start_return {
         return Some((Page::Start, Page::Start.url().to_owned()));
     }
-    validated_url(url).map(|(page, url)| (page, url.into()))
+    if preview && url == "about:blank" {
+        return Some((Page::Web, url.to_owned()));
+    }
+    navigation_url(url, preview).map(|(page, url)| (page, url.into()))
 }
 
 fn safe_title(raw: &str) -> Option<String> {
@@ -375,7 +421,11 @@ fn create_content(
                 }
                 return target == "about:blank";
             }
-            let allowed = permits_content_navigation(&target, &policy);
+            let allowed = if navigation_counts.https_preview {
+                target == "about:blank" || preview_url(&target).is_some()
+            } else {
+                permits_content_navigation(&target, &policy)
+            };
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
                 eprintln!("content navigation allowed={allowed}");
             }
@@ -431,11 +481,13 @@ fn main() {
         [] => Mode::Normal,
         [flag] if flag == "--smoke" => Mode::Smoke,
         [flag] if flag == "--security-smoke" => Mode::SecuritySmoke,
+        [flag] if flag == "--https-preview" && HAS_HTTPS_PREVIEW => Mode::HttpsPreview,
         _ => {
             eprintln!("Usage: search-browser [--smoke|--security-smoke]");
             process::exit(2);
         }
     };
+    let preview = mode == Mode::HttpsPreview;
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let window_builder = WindowBuilder::new()
         .with_title("Search")
@@ -481,13 +533,16 @@ fn main() {
     }
     let security_counts = Arc::new(SecurityCounts {
         fixture_mode: mode == Mode::SecuritySmoke,
+        https_preview: preview,
         ..SecurityCounts::default()
     });
     let ready_proxy = proxy.clone();
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
         .with_html(include_str!("chrome.html"))
-        .with_initialization_script(if cfg!(target_os = "macos") {
+        .with_initialization_script(if preview {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview'));"
+        } else if cfg!(target_os = "macos") {
             "document.documentElement?.classList.add('mac-toolbar'); document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar'));"
         } else { "" })
         .with_incognito(true)
@@ -600,10 +655,10 @@ fn main() {
             }
             Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
-                    && (allowed_url(&url).is_some() || url == "about:blank")
+                    && (navigation_url(&url, preview).is_some() || url == "about:blank")
                 {
                     tab.loading = true;
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return) {
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.title = page.label().to_owned();
@@ -625,7 +680,7 @@ fn main() {
                 }
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.loading = false;
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return) {
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.pending_start_return = false;
@@ -795,7 +850,16 @@ fn main() {
                         }
                     }
                     Command::Open { value } => {
-                        if let Some((page, url)) = page_from_input(&value) {
+                        let destination = if preview {
+                            if value.trim() == Page::Start.url() {
+                                Some((Page::Start, Page::Start.url().to_owned()))
+                            } else {
+                                preview_url(value.trim()).map(|(page, url)| (page, url.into()))
+                            }
+                        } else {
+                            page_from_input(&value)
+                        };
+                        if let Some((page, url)) = destination {
                             let is_shared = shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view));
                             let result = if is_shared && matches!(page, Page::Start) {
                                 Ok(())
@@ -830,10 +894,17 @@ fn main() {
                                 }
                             };
                             if result.is_ok() {
-                                tabs[active].page = page;
-                                tabs[active].display_url = url;
-                                tabs[active].title = page.label().to_owned();
-                                tabs[active].loading = !matches!(page, Page::Start);
+                                let waits_for_commit = preview && !matches!(page, Page::Start);
+                                if waits_for_commit && is_shared {
+                                    tabs[active].page = Page::Web;
+                                    tabs[active].display_url = "about:blank".to_owned();
+                                    tabs[active].title = Page::Web.label().to_owned();
+                                } else if !waits_for_commit {
+                                    tabs[active].page = page;
+                                    tabs[active].display_url = url;
+                                    tabs[active].title = page.label().to_owned();
+                                    tabs[active].loading = !matches!(page, Page::Start);
+                                }
                                 if matches!(page, Page::Start) {
                                     tabs[active].has_start_entry = true;
                                 }
@@ -844,7 +915,11 @@ fn main() {
                                 attempted_address = Some(value);
                             }
                         } else {
-                            notice = Some("Пока доступны Rust, Wikipedia, Excalidraw и local.");
+                            notice = Some(if preview {
+                                "Введи полный HTTPS-адрес, например https://developer.mozilla.org/."
+                            } else {
+                                "Пока доступны Rust, Wikipedia, Excalidraw и local."
+                            });
                             attempted_address = Some(value);
                         }
                     }
@@ -935,6 +1010,25 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn https_preview_accepts_new_sites_without_widening_normal_navigation() {
+        let site = "https://developer.mozilla.org/ru/docs/Web/HTML";
+        assert!(navigation_url(site, false).is_none());
+        assert!(matches!(navigation_url(site, true), Some((Page::Web, _))));
+        for denied in [
+            "http://developer.mozilla.org/",
+            "https://developer.mozilla.org:8443/",
+            "https://@developer.mozilla.org/",
+            "https://127.0.0.1/",
+            "https://app.localhost./",
+            "http://127.0.0.1:43127/",
+            "file:///tmp/search-preview.html",
+            "mailto:search@example.org",
+        ] {
+            assert!(navigation_url(denied, true).is_none(), "{denied}");
+        }
+    }
 
     #[test]
     fn navigation_accepts_only_exact_origins() {
@@ -1036,14 +1130,14 @@ mod tests {
 
     #[test]
     fn back_to_embedded_start_restores_display_address() {
-        let (page, url) = loaded_page("https://rust-lang.org/", false).unwrap();
+        let (page, url) = loaded_page("https://rust-lang.org/", false, false).unwrap();
         assert!(matches!(page, Page::Rust));
         assert_eq!(url, "https://rust-lang.org/");
-        let (page, url) = loaded_page("about:blank", true).unwrap();
+        let (page, url) = loaded_page("about:blank", true, false).unwrap();
         assert!(matches!(page, Page::Start));
         assert_eq!(url, "search:start");
-        assert!(loaded_page("about:blank", false).is_none());
-        let (page, url) = loaded_page("https://rust-lang.org/learn", true).unwrap();
+        assert!(loaded_page("about:blank", false, false).is_none());
+        let (page, url) = loaded_page("https://rust-lang.org/learn", true, false).unwrap();
         assert!(matches!(page, Page::Rust));
         assert_eq!(url, "https://rust-lang.org/learn");
     }

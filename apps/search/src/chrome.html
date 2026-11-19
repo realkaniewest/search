@@ -103,8 +103,10 @@
     @keyframes tab-appear { from { opacity: .55; } }
     @keyframes address-appear { from { opacity: 0; transform: translateY(3px) scale(.97); } }
   }
+  .preview-label { display: none; }
+  .https-preview .preview-label { display: inline; color: #bbc5d4; font-size: 11px; }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><span class="preview-label">HTTPS Preview</span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" hidden aria-describedby="notice">
 <script>
   'use strict';
