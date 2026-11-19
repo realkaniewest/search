@@ -106,22 +106,37 @@
   .composer[hidden] { display: none; }
   .composer {
     position: fixed; inset: 0; z-index: 5;
-    background: radial-gradient(ellipse at 50% 16%, #26303b 0, #171b22 32%, #080a0e 95%);
-    background: radial-gradient(ellipse at 50% 16%, #26303be8 0, #171b22ec 32%, #080a0ef7 95%);
+    background: radial-gradient(ellipse at 50% 18%, #242426 0, #171719 37%, #0c0c0e 100%);
   }
   .composer-panel {
     position: absolute; top: clamp(77px, 21vh, 205px); left: 50%;
-    transform: translateX(-50%); width: min(540px, calc(100% - 48px)); height: 57px;
-    display: flex; align-items: center; gap: 15px; padding: 0 17px;
-    border-radius: 21px; border: 1px solid #aebed449;
-    background: linear-gradient(145deg, #3e4b5c86, #27303cd9);
-    box-shadow: 0 20px 55px #0008, inset 0 1px #ffffff17;
+    transform: translateX(-50%); width: min(600px, calc(100% - 48px)); height: 55px;
+    display: flex; align-items: center; gap: 16px; padding: 0 18px;
+    border-radius: 26px; border: 1px solid #ffffff29;
+    background: linear-gradient(168deg, #ffffff18, #ffffff08 75%);
+    box-shadow: 0 16px 38px #0006, inset 0 1px #ffffff10;
   }
-  .composer-icon { width: 15px; height: 15px; border: 2px solid #b2bece; border-radius: 50%; position: relative; flex: none; }
-  .composer-icon::after { content: ''; position: absolute; width: 7px; height: 2px; right: -5px; bottom: -3px; background: #b2bece; transform: rotate(45deg); }
-  .composer .address { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; box-shadow: none; font: inherit; font-size: 21px; }
-  .composer .address:focus { box-shadow: none; }
-  .composer-key { color: #afbacc; padding: 3px 6px; border: 1px solid #b4c5de3b; border-radius: 6px; font: inherit; }
+  .composer-panel:focus-within { border-color: #ffffff3b; }
+  .composer-icon {
+    width: 15px; height: 15px; border: 1.8px solid #aaaab0;
+    border-radius: 50%; position: relative; flex: none;
+  }
+  .composer-icon::after {
+    content: ''; position: absolute; width: 7px; height: 1.8px;
+    right: -5px; bottom: -3px; border-radius: 1px; background: #aaaab0; transform: rotate(45deg);
+  }
+  .composer .address {
+    flex: 1; min-width: 0; height: 100%; padding: 0;
+    border: 0; background: none; font: inherit; font-size: 20px;
+    letter-spacing: -.015em; caret-color: #efeff2;
+  }
+  .composer .address:focus-visible { outline: none; box-shadow: none; }
+  .composer .address::placeholder { color: #aaaab0; }
+  .composer-key { color: #a6a6ad; font: inherit; font-size: 16px; }
+  .composer .address:placeholder-shown + .composer-key { visibility: hidden; }
+  @media (prefers-reduced-transparency: reduce) {
+    .composer-panel { background: #2d2d30; }
+  }
   @media (prefers-reduced-motion: no-preference) {
     .composer:not([hidden]) { animation: veil-in 190ms ease-out; }
     .composer:not([hidden]) .composer-panel { animation: panel-in 220ms cubic-bezier(.2,.8,.25,1); }
