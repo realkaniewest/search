@@ -103,21 +103,30 @@
     @keyframes tab-appear { from { opacity: .55; } }
     @keyframes address-appear { from { opacity: 0; transform: translateY(3px) scale(.97); } }
   }
-  .https-preview .tab-strip:has(.composing) { --strip-width: 720px; }
-  .https-preview .tab.composing { flex: 3 1 0; min-width: 180px; background: transparent; border-color: transparent; box-shadow: none; }
-  .tab.composing::after {
-    content: '⌕'; position: absolute; left: 12px; top: 4px;
-    color: #9eaab9; font-size: 19px; line-height: 22px; pointer-events: none;
+  .composer[hidden] { display: none; }
+  .composer {
+    position: fixed; inset: 0; z-index: 5;
+    background: radial-gradient(ellipse at 50% 16%, #26303b 0, #171b22 32%, #080a0e 95%);
+    background: radial-gradient(ellipse at 50% 16%, #26303be8 0, #171b22ec 32%, #080a0ef7 95%);
   }
-  .tab.composing .address {
-    inset: 0 26px 0 0; padding-left: 30px; border-radius: 17px;
-    background: linear-gradient(170deg, #ffffff1e, #ffffff0b);
-    border-color: #a7b7cd63;
-    box-shadow: inset 0 1px #ffffff12;
+  .composer-panel {
+    position: absolute; top: clamp(77px, 21vh, 205px); left: 50%;
+    transform: translateX(-50%); width: min(540px, calc(100% - 48px)); height: 57px;
+    display: flex; align-items: center; gap: 15px; padding: 0 17px;
+    border-radius: 21px; border: 1px solid #aebed449;
+    background: linear-gradient(145deg, #3e4b5c86, #27303cd9);
+    box-shadow: 0 20px 55px #0008, inset 0 1px #ffffff17;
   }
+  .composer-icon { width: 15px; height: 15px; border: 2px solid #b2bece; border-radius: 50%; position: relative; flex: none; }
+  .composer-icon::after { content: ''; position: absolute; width: 7px; height: 2px; right: -5px; bottom: -3px; background: #b2bece; transform: rotate(45deg); }
+  .composer .address { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; box-shadow: none; font: inherit; font-size: 21px; }
+  .composer .address:focus { box-shadow: none; }
+  .composer-key { color: #afbacc; padding: 3px 6px; border: 1px solid #b4c5de3b; border-radius: 6px; font: inherit; }
   @media (prefers-reduced-motion: no-preference) {
-    .tab.composing, .tab.composing .address:not([hidden]) { animation: compose-in 150ms ease-out; }
-    @keyframes compose-in { from { opacity: .45; } }
+    .composer:not([hidden]) { animation: veil-in 190ms ease-out; }
+    .composer:not([hidden]) .composer-panel { animation: panel-in 220ms cubic-bezier(.2,.8,.25,1); }
+    @keyframes veil-in { from { opacity: 0; } }
+    @keyframes panel-in { from { opacity: 0; transform: translate(-50%, -12px) scale(.97); } }
   }
   .search-engine { display: none; color: #e2e7ef; background: #303238; border: 1px solid #ffffff22; border-radius: 9px; padding: 4px; font: inherit; }
   .https-preview .search-engine { display: inline-block; }
@@ -126,6 +135,9 @@
 </style>
 <div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><select id="search-engine" class="search-engine" aria-label="Поисковая система"><option value="google">Google</option><option value="yandex">Яндекс</option><option value="duckduckgo">DuckDuckGo</option><option value="bing">Bing</option></select><span class="preview-label">HTTPS Preview</span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" hidden aria-describedby="notice">
+<div id="composer" class="composer" role="dialog" aria-label="Быстрый поиск" aria-modal="true" hidden>
+  <div id="composer-panel" class="composer-panel"><span class="composer-icon" aria-hidden="true"></span><kbd class="composer-key" aria-hidden="true">↵</kbd></div>
+</div>
 <script>
   'use strict';
   const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice'), activity = document.getElementById('activity');
@@ -144,24 +156,69 @@
   let editorTab;
   let renderingTabs = false;
   let focusNewTab = false;
+  let composerOpen = false;
+  let composerClosing = false;
+  const composer = document.getElementById('composer');
+  const composerPanel = document.getElementById('composer-panel');
   const isPreview = () => document.documentElement?.classList.contains('https-preview');
-  function editAddress(compose = false) {
+  function editAddress() {
     if (!editorTab) return;
     editorTab.classList.add('editing');
-    if (compose) editorTab.classList.add('composing');
     address.hidden = false;
     editorTab.scrollIntoView({block:'nearest',inline:'nearest'});
     address.focus();
     address.select();
   }
   function hideAddress() {
-    if (renderingTabs) return;
+    if (renderingTabs || composerOpen) return;
     editorTab?.classList.remove('editing');
-    editorTab?.classList.remove('composing');
     address.hidden = true;
   }
   address.addEventListener('blur', hideAddress);
   const send = value => window.ipc.postMessage(JSON.stringify(value));
+  function showComposer() {
+    composerOpen = true;
+    composer.hidden = false;
+    composerPanel.insertBefore(address, composerPanel.lastElementChild);
+    address.hidden = false;
+    send({type:'composer', visible:true});
+    address.focus();
+  }
+  function dismissComposer(done) {
+    if (composerClosing) return;
+    composerClosing = true;
+    const finish = () => {
+      composerOpen = composerClosing = false;
+      composer.hidden = true;
+      editorTab?.append(address);
+      hideAddress();
+      send({type:'composer', visible:false});
+      done();
+    };
+    if (!composerPanel.animate || matchMedia('(prefers-reduced-motion: reduce)').matches || !editorTab) {
+      finish();
+      return;
+    }
+    const panel = composerPanel.getBoundingClientRect();
+    const tab = editorTab.getBoundingClientRect();
+    const x = tab.left + tab.width / 2 - panel.left - panel.width / 2;
+    const y = tab.top + tab.height / 2 - panel.top - panel.height / 2;
+    const motion = {duration: 235, easing: 'cubic-bezier(.3,.05,.2,1)', fill: 'forwards'};
+    const veil = composer.animate([{opacity:1}, {opacity:.1}], motion);
+    const flight = composerPanel.animate([
+      {transform:'translateX(-50%) scale(1)', opacity:1},
+      {transform:`translate(calc(-50% + ${x}px), ${y}px) scale(${tab.width / panel.width}, ${tab.height / panel.height})`, opacity:.35},
+    ], motion);
+    const settle = () => {
+      veil.cancel();
+      flight.cancel();
+      finish();
+    };
+    flight.finished.then(settle, settle);
+  }
+  composer.onclick = event => {
+    if (event.target === composer) address.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape'}));
+  };
   function newTab() {
     focusNewTab = Boolean(isPreview());
     send({type:'new'});
@@ -178,9 +235,13 @@
       address.value = displayAddress(stateTabs[active]?.url);
       notice.textContent = '';
       address.setAttribute('aria-invalid', 'false');
-      send({type:'cancel-address'});
-      address.blur();
-      editorTab?.querySelector('[role="tab"]')?.focus();
+      const cancel = () => {
+        send({type:'cancel-address'});
+        address.blur();
+        editorTab?.querySelector('[role="tab"]')?.focus();
+      };
+      if (composerOpen) dismissComposer(cancel);
+      else cancel();
       return;
     }
     if(e.key!=='Enter' || !address.value.trim()) return;
@@ -194,7 +255,13 @@
       address.setAttribute('aria-invalid','true');
       return;
     }
-    send(command); address.blur();
+    if (composerOpen) {
+      e.preventDefault();
+      dismissComposer(() => send(command));
+    } else {
+      send(command);
+      address.blur();
+    }
   });
   address.addEventListener('input', () => { notice.textContent=''; address.setAttribute('aria-invalid','false'); });
   function tabShortcut(event, state) {
@@ -210,6 +277,10 @@
   }
   document.addEventListener('keydown', e => {
     if (e.isComposing || e.defaultPrevented) return;
+    if (composerOpen) {
+      if (e.key === 'Tab') e.preventDefault();
+      return;
+    }
     const target = tabShortcut(e, window.searchState);
     if (target) {
       e.preventDefault();
@@ -243,7 +314,6 @@
     const focusedIndex = focused?.dataset?.index;
     const focusedAction = focused?.dataset?.action;
     const keepEditor = focused === address && !activeChanged;
-    const keepComposer = keepEditor && editorTab?.classList.contains('composing');
     const selectionStart = address.selectionStart, selectionEnd = address.selectionEnd;
     renderingTabs = true;
     tabs.replaceChildren();
@@ -274,13 +344,13 @@
       item.append(button,close);
       if (index===state.active) {
         editorTab = item;
-        item.append(address);
+        if (!composerOpen) item.append(address);
       }
       tabs.append(item);
     });
     renderingTabs = false;
-    if (keepEditor) {
-      editAddress(keepComposer);
+    if (keepEditor && !composerOpen) {
+      editAddress();
       if (selectionStart !== null) address.setSelectionRange(selectionStart, selectionEnd);
     } else {
       hideAddress();
@@ -324,7 +394,7 @@
       const url = state.tabs[state.active]?.url;
       address.value = state.attempted_address ?? displayAddress(url);
     }
-    if (composeNewTab) editAddress(true);
+    if (composeNewTab) showComposer();
     else if (state.attempted_address != null && address.hidden) editAddress();
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
