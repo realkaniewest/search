@@ -241,7 +241,11 @@ fn preview_destination(raw: &str, engine: SearchEngine) -> Option<(Page, String)
         return preview_url(&format!("https://{input}")).map(|(page, url)| (page, url.into()));
     }
     let first_token = input.split_whitespace().next()?;
+    let looks_like_bare_url = first_token
+        .split_once(['/', '?', '#', ':'])
+        .is_some_and(|(host, _)| host.contains('.') || host.eq_ignore_ascii_case("localhost"));
     if first_token.contains('@')
+        || looks_like_bare_url
         || first_token.split_once(':').is_some_and(|(scheme, rest)| {
             !rest.is_empty()
                 && matches!(
@@ -1100,6 +1104,7 @@ mod tests {
             "127.0.0.1",
             "file:///tmp/test",
             "mailto:test@example.org trailing",
+            "github.com/settings?token=example trailing",
         ] {
             assert!(
                 preview_destination(blocked, SearchEngine::Google).is_none(),
