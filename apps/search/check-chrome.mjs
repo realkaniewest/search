@@ -9,6 +9,7 @@ class Element {
     this.className = '';
     this.classList = {
       add: value => { this.className += ' ' + value; },
+      contains: value => this.className.split(' ').includes(value),
       remove: value => { this.className = this.className.split(' ').filter(name => name !== value).join(' '); },
     };
     this.selectionStart = this.selectionEnd = 0;
@@ -288,3 +289,16 @@ window.renderSearch({active: 0, tabs: [secondId, thirdId]});
 assert.equal(address.value, 'editing current tab', 'closing a preceding tab preserves the active draft');
 
 console.log('Search chrome keyboard and tab controls passed');
+
+document.documentElement = {classList: {contains: name => name === 'https-preview'}};
+const previousTabs = window.searchState.tabs;
+elements.get('add').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'new'});
+const newTab = {id: 900, label: 'Новая вкладка', url: 'search:start'};
+window.renderSearch({active: previousTabs.length, tabs: [...previousTabs, newTab]});
+assert.equal(document.activeElement, address, 'new tab opens its search field immediately');
+assert.equal(address.value, '', 'new tab does not reuse previous input');
+assert.ok(tabs.children.at(-1).classList.contains('composing'));
+address.dispatch('keydown', {key: 'Escape'});
+assert.equal(address.hidden, true, 'Escape closes the composer');
+assert.equal(window.searchState.tabs.at(-1).id, 900, 'Escape leaves new tab open');
