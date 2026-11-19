@@ -103,6 +103,22 @@
     @keyframes tab-appear { from { opacity: .55; } }
     @keyframes address-appear { from { opacity: 0; transform: translateY(3px) scale(.97); } }
   }
+  .https-preview .tab-strip:has(.composing) { --strip-width: 720px; }
+  .https-preview .tab.composing { flex: 3 1 0; min-width: 180px; background: transparent; border-color: transparent; box-shadow: none; }
+  .tab.composing::after {
+    content: '⌕'; position: absolute; left: 12px; top: 4px;
+    color: #9eaab9; font-size: 19px; line-height: 22px; pointer-events: none;
+  }
+  .tab.composing .address {
+    inset: 0 26px 0 0; padding-left: 30px; border-radius: 17px;
+    background: linear-gradient(170deg, #ffffff1e, #ffffff0b);
+    border-color: #a7b7cd63;
+    box-shadow: inset 0 1px #ffffff12;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .tab.composing, .tab.composing .address:not([hidden]) { animation: compose-in 150ms ease-out; }
+    @keyframes compose-in { from { opacity: .45; } }
+  }
   .search-engine { display: none; color: #e2e7ef; background: #303238; border: 1px solid #ffffff22; border-radius: 9px; padding: 4px; font: inherit; }
   .https-preview .search-engine { display: inline-block; }
   .preview-label { display: none; }
@@ -127,9 +143,12 @@
   new ResizeObserver(updateTabScroll).observe(tabs.parentElement);
   let editorTab;
   let renderingTabs = false;
-  function editAddress() {
+  let focusNewTab = false;
+  const isPreview = () => document.documentElement?.classList.contains('https-preview');
+  function editAddress(compose = false) {
     if (!editorTab) return;
     editorTab.classList.add('editing');
+    if (compose) editorTab.classList.add('composing');
     address.hidden = false;
     editorTab.scrollIntoView({block:'nearest',inline:'nearest'});
     address.focus();
@@ -138,11 +157,16 @@
   function hideAddress() {
     if (renderingTabs) return;
     editorTab?.classList.remove('editing');
+    editorTab?.classList.remove('composing');
     address.hidden = true;
   }
   address.addEventListener('blur', hideAddress);
   const send = value => window.ipc.postMessage(JSON.stringify(value));
-  document.getElementById('add').onclick = () => send({type:'new'});
+  function newTab() {
+    focusNewTab = Boolean(isPreview());
+    send({type:'new'});
+  }
+  document.getElementById('add').onclick = newTab;
   document.getElementById('back').onclick = () => send({type:'back'});
   document.getElementById('forward').onclick = () => send({type:'forward'});
   document.getElementById('reload').onclick = () => send({type:'reload'});
@@ -198,7 +222,11 @@
       }
       return;
     }
-    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') { e.preventDefault(); send({type:e.shiftKey?'reopen':'new'}); }
+    if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='t') {
+      e.preventDefault();
+      if (e.shiftKey) send({type:'reopen'});
+      else newTab();
+    }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); editAddress(); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') {
@@ -208,13 +236,14 @@
       if(tab) send({type:'close',id:tab.id});
     }
   });
-  const displayAddress = url => url === 'search:start' ? '' : url ?? '';
+  const displayAddress = url => url === 'search:start' || url === 'about:blank' ? '' : url ?? '';
   window.searchState = {active:0,tabs:[]};
   function renderTabs(state, previous, activeChanged) {
     const focused = document.activeElement;
     const focusedIndex = focused?.dataset?.index;
     const focusedAction = focused?.dataset?.action;
     const keepEditor = focused === address && !activeChanged;
+    const keepComposer = keepEditor && editorTab?.classList.contains('composing');
     const selectionStart = address.selectionStart, selectionEnd = address.selectionEnd;
     renderingTabs = true;
     tabs.replaceChildren();
@@ -251,7 +280,7 @@
     });
     renderingTabs = false;
     if (keepEditor) {
-      editAddress();
+      editAddress(keepComposer);
       if (selectionStart !== null) address.setSelectionRange(selectionStart, selectionEnd);
     } else {
       hideAddress();
@@ -287,12 +316,16 @@
     document.getElementById('back').disabled = !state.can_back;
     document.getElementById('forward').disabled = !state.can_forward;
     const activeTab = state.tabs[state.active];
+    const composeNewTab = focusNewTab &&
+      state.tabs.length > previous.tabs.length && !previous.tabs.some(tab => tab.id === activeTab?.id);
+    if (composeNewTab || state.notice) focusNewTab = false;
     document.getElementById('reload').disabled = !activeTab || activeTab.url === 'search:start';
     if(document.activeElement!==address || activeChanged) {
       const url = state.tabs[state.active]?.url;
       address.value = state.attempted_address ?? displayAddress(url);
     }
-    if (state.attempted_address != null && address.hidden) editAddress();
+    if (composeNewTab) editAddress(true);
+    else if (state.attempted_address != null && address.hidden) editAddress();
     notice.textContent=state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
     address.setAttribute('aria-invalid',state.attempted_address != null?'true':'false');
