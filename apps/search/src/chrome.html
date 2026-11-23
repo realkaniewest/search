@@ -221,7 +221,7 @@
   <section class="history-panel">
     <div class="history-head"><h1 id="library-title">История</h1><button id="history-clear" class="history-action" type="button">Очистить</button><button id="history-close" class="history-action" type="button" aria-label="Закрыть историю">×</button></div>
     <input id="history-filter" class="address history-filter" type="search" aria-label="Поиск по истории" placeholder="Поиск по истории">
-    <div id="history-status" class="history-empty" role="status"></div>
+    <div id="library-error" class="history-empty" role="alert"></div><div id="history-status" class="history-empty" role="status"></div>
     <div id="history-list" class="history-list"></div>
   </section>
 </div>
@@ -302,6 +302,7 @@
   const historyClear = document.getElementById('history-clear');
   const historyClose = document.getElementById('history-close');
   const historyStatus = document.getElementById('history-status');
+  const libraryError = document.getElementById('library-error');
   const bookmarksOpen = document.getElementById('bookmarks-open');
   const bookmarkToggle = document.getElementById('bookmark-toggle');
   const libraryTitle = document.getElementById('library-title');
@@ -356,7 +357,7 @@
       remove.type = 'button';
       remove.className = 'history-action';
       remove.textContent = '×';
-      remove.setAttribute('aria-label', `Удалить из истории: ${entry.title}`);
+      remove.setAttribute('aria-label', `${libraryKind === 'history' ? 'Удалить из истории' : 'Удалить закладку'}: ${entry.title}`);
       remove.onclick = () => {
         historyFilter.focus();
         send({type:libraryKind === 'history' ? 'history-remove' : 'bookmark-remove', value:entry.url});
@@ -383,6 +384,7 @@
     historyFilter.placeholder = kind === 'history' ? 'Поиск по истории' : 'Поиск по закладкам';
     historyFilter.setAttribute('aria-label', historyFilter.placeholder);
     historyShowing = true;
+    libraryError.textContent = '';
     historyLayer.hidden = false;
     historyFilter.value = '';
     historyFilter.focus();
@@ -653,6 +655,7 @@
     if (composeNewTab) showComposer();
     else if (state.attempted_address != null && address.hidden) editAddress();
     notice.textContent=state.notice ?? '';
+    if (historyShowing) libraryError.textContent = state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
     address.setAttribute('aria-invalid',state.attempted_address != null?'true':'false');
   };
