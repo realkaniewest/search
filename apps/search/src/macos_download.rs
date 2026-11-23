@@ -128,6 +128,40 @@ fn finish(stage: tempfile::NamedTempFile, destination: &Path) -> Outcome {
 }
 
 pub(crate) fn fetch(url: &Url, destination: &Path, control: &DownloadControl) -> Outcome {
+    fetch_with(destination, control, |path| {
+        Command::new("/usr/bin/curl")
+            .args([
+                "-q",
+                "--silent",
+                "--fail",
+                "--proto",
+                "=https",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "180",
+                "--max-filesize",
+                "104857600",
+                "--globoff",
+                "--write-out",
+                "%{http_code}",
+            ])
+            .arg("--output")
+            .arg(path)
+            .arg("--url")
+            .arg(url.as_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+}
+
+fn fetch_with(
+    destination: &Path,
+    control: &DownloadControl,
+    start: impl FnOnce(&Path) -> io::Result<std::process::Child>,
+) -> Outcome {
     if control.cancelled() {
         return Outcome::Cancelled;
     }
@@ -146,31 +180,7 @@ pub(crate) fn fetch(url: &Url, destination: &Path, control: &DownloadControl) ->
     let Ok(stage) = tempfile::NamedTempFile::new_in(staging_dir.path()) else {
         return Outcome::Failed;
     };
-    let started = Command::new("/usr/bin/curl")
-        .args([
-            "-q",
-            "--silent",
-            "--fail",
-            "--proto",
-            "=https",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "180",
-            "--max-filesize",
-            "104857600",
-            "--globoff",
-            "--write-out",
-            "%{http_code}",
-        ])
-        .arg("--output")
-        .arg(stage.path())
-        .arg("--url")
-        .arg(url.as_str())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
+    let started = start(stage.path());
     let Ok(mut child) = started else {
         return Outcome::Failed;
     };
@@ -228,6 +238,30 @@ pub(crate) fn fetch(url: &Url, destination: &Path, control: &DownloadControl) ->
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn mid_transfer_cancellation_removes_staged_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("cancelled.txt");
+        let control = DownloadControl::default();
+        let (staged, ready) = std::sync::mpsc::channel();
+        thread::scope(|scope| {
+            let job = scope.spawn(|| {
+                fetch_with(&destination, &control, move |path| {
+                    std::fs::write(path, b"partial")?;
+                    let child = Command::new("/bin/sleep").arg("5").spawn()?;
+                    staged.send(path.to_owned()).unwrap();
+                    Ok(child)
+                })
+            });
+            let path = ready.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), b"partial");
+            assert!(control.cancel());
+            assert_eq!(job.join().unwrap(), Outcome::Cancelled);
+        });
+        assert!(!destination.exists());
+        assert_eq!(root.path().read_dir().unwrap().count(), 0);
+    }
 
     #[test]
     fn staging_preserves_existing_files_and_promotes_completed_bytes() {
