@@ -59,6 +59,7 @@ enum Mode {
     SecuritySmoke,
     HttpsPreview,
     PrivatePreview,
+    DeveloperPreview,
 }
 
 #[derive(Default)]
@@ -66,6 +67,7 @@ struct SecurityCounts {
     fixture_mode: bool,
     https_preview: bool,
     persistent_site_data: bool,
+    developer_preview: bool,
     blocked_navigation: AtomicUsize,
     blocked_popup: AtomicUsize,
     blocked_download: AtomicUsize,
@@ -110,6 +112,10 @@ enum Command {
     #[cfg(target_os = "macos")]
     #[serde(rename = "cancel-download")]
     CancelDownload,
+    #[serde(rename = "developer-window")]
+    DeveloperWindow,
+    #[serde(rename = "inspect-page")]
+    InspectPage,
     #[serde(rename = "private-window")]
     PrivateWindow,
     #[serde(rename = "bookmarks-list")]
@@ -399,6 +405,49 @@ fn preview_destination(raw: &str, engine: SearchEngine) -> Option<(Page, String)
     preview_url(url.as_str()).map(|(page, url)| (page, url.into()))
 }
 
+fn developer_url(raw: &str) -> Option<Url> {
+    let (scheme, rest) = raw.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+        || authority.is_empty()
+        || authority.contains('@')
+        || raw
+            .chars()
+            .any(|ch| ch == '\\' || ch.is_control() || ch.is_whitespace())
+    {
+        return None;
+    }
+    let mut url = Url::parse(raw).ok()?;
+    match url.host()? {
+        Host::Domain("localhost") => url.set_host(Some("127.0.0.1")).ok()?,
+        Host::Ipv4(ip) if ip.octets() == [127, 0, 0, 1] => {}
+        Host::Ipv6(ip) if ip.is_loopback() => {}
+        _ => return None,
+    }
+    Some(url)
+}
+
+fn developer_destination(raw: &str) -> Option<(Page, String)> {
+    let input = raw.trim();
+    if input == Page::Start.url() {
+        return Some((Page::Start, input.to_owned()));
+    }
+    let url = if input.contains("://") {
+        developer_url(input)
+    } else {
+        developer_url(&format!("http://{input}"))
+    }?;
+    Some((Page::Web, url.into()))
+}
+
+fn start_document(developer: bool) -> &'static str {
+    if developer {
+        include_str!("developer.html")
+    } else {
+        include_str!("start.html")
+    }
+}
+
 fn navigation_url(raw: &str, preview: bool) -> Option<(Page, Url)> {
     if preview {
         preview_url(raw)
@@ -494,12 +543,20 @@ impl Tab {
     }
 }
 
-fn loaded_page(url: &str, pending_start_return: bool, preview: bool) -> Option<(Page, String)> {
+fn loaded_page(
+    url: &str,
+    pending_start_return: bool,
+    preview: bool,
+    developer: bool,
+) -> Option<(Page, String)> {
     if url == "about:blank" && pending_start_return {
         return Some((Page::Start, Page::Start.url().to_owned()));
     }
     if preview && url == "about:blank" {
         return Some((Page::Web, url.to_owned()));
+    }
+    if developer {
+        return developer_url(url).map(|url| (Page::Web, url.into()));
     }
     navigation_url(url, preview).map(|(page, url)| (page, url.into()))
 }
@@ -618,6 +675,11 @@ fn create_content(
     let popup_counts = counts.clone();
     let persistent =
         counts.persistent_site_data && !matches!(page, Page::Start | Page::LocalFixture);
+    let developer = counts.developer_preview;
+    let developer_origin = developer
+        .then(|| developer_url(initial_url))
+        .flatten()
+        .map(|url| url.origin());
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
     let second_fixture =
@@ -625,6 +687,7 @@ fn create_content(
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
         .with_incognito(!persistent)
+        .with_devtools(developer)
         .with_permission_handler(move |kind| {
             permission_counts
                 .denied_permission
@@ -653,7 +716,15 @@ fn create_content(
                 }
                 return target == "about:blank";
             }
-            let allowed = if navigation_counts.https_preview {
+            let allowed = if developer {
+                target == "about:blank"
+                    || developer_url(&target).is_some_and(|url| {
+                        developer_origin.as_ref() == Some(&url.origin())
+                            && Url::parse(&target)
+                                .ok()
+                                .is_some_and(|candidate| candidate.host() == url.host())
+                    })
+            } else if navigation_counts.https_preview {
                 target == "about:blank" || preview_url(&target).is_some()
             } else {
                 permits_content_navigation(&target, &policy)
@@ -687,7 +758,7 @@ fn create_content(
             let _ = proxy.send_event(AppEvent::ContentTitle { id, title });
         });
     let builder = if matches!(page, Page::Start) {
-        builder.with_html(include_str!("start.html"))
+        builder.with_html(start_document(developer))
     } else {
         builder.with_url(initial_url)
     };
@@ -724,13 +795,15 @@ fn main() {
         [flag] if flag == "--smoke" => Mode::Smoke,
         [flag] if flag == "--security-smoke" => Mode::SecuritySmoke,
         [flag] if flag == "--https-preview" && HAS_HTTPS_PREVIEW => Mode::HttpsPreview,
+        [flag] if flag == "--developer-preview" && HAS_HTTPS_PREVIEW => Mode::DeveloperPreview,
         [flag] if flag == "--private-preview" && HAS_HTTPS_PREVIEW => Mode::PrivatePreview,
         _ => {
             eprintln!("Usage: search-browser [--smoke|--security-smoke]");
             process::exit(2);
         }
     };
-    let private = mode == Mode::PrivatePreview;
+    let developer = mode == Mode::DeveloperPreview;
+    let private = mode == Mode::PrivatePreview || developer;
     let preview = mode == Mode::HttpsPreview || private;
     let engine_path = if preview && !private {
         preference_path()
@@ -758,7 +831,9 @@ fn main() {
         .unwrap_or_default();
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let window_builder = WindowBuilder::new()
-        .with_title(if private {
+        .with_title(if developer {
+            "Search · Разработка"
+        } else if private {
             "Search · Временное окно"
         } else {
             "Search"
@@ -806,6 +881,7 @@ fn main() {
     let security_counts = Arc::new(SecurityCounts {
         fixture_mode: mode == Mode::SecuritySmoke,
         https_preview: preview,
+        developer_preview: developer,
         persistent_site_data: preview && !private && supports_separate_site_data_store(),
         ..SecurityCounts::default()
     });
@@ -813,7 +889,9 @@ fn main() {
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
         .with_html(include_str!("chrome.html"))
-        .with_initialization_script(if private {
+        .with_initialization_script(if developer {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview', 'developer-preview'));"
+        } else if private {
             "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview'));"
         } else if preview {
             "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview'));"
@@ -1031,10 +1109,10 @@ fn main() {
             }
             Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
-                    && (navigation_url(&url, preview).is_some() || url == "about:blank")
+                    && (url == "about:blank" || if developer { developer_url(&url).is_some() } else { navigation_url(&url, preview).is_some() })
                 {
                     tab.loading = true;
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview) {
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.title = page.label().to_owned();
@@ -1056,7 +1134,7 @@ fn main() {
                 }
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id) {
                     tab.loading = false;
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview) {
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.pending_start_return = false;
@@ -1251,16 +1329,21 @@ fn main() {
                         }
                     }
                     Command::Open { value, engine } => {
-                        let destination = if preview {
+                        let destination = if developer {
+                            developer_destination(&value)
+                        } else if preview {
                             preview_destination(&value, engine)
                         } else {
                             page_from_input(&value)
                         };
                         if let Some((page, url)) = destination {
                             let is_shared = shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view));
+                            let changes_local_origin = developer && !matches!(page, Page::Start)
+                                && developer_url(&tabs[active].display_url).map(|url| url.origin())
+                                    != developer_url(&url).map(|url| url.origin());
                             let result = if is_shared && matches!(page, Page::Start) {
                                 Ok(())
-                            } else if is_shared || matches!(page, Page::LocalFixture) {
+                            } else if is_shared || changes_local_origin || matches!(page, Page::LocalFixture) {
                                 let (_, rect) = bounds(&window);
                                 #[cfg(target_os = "linux")]
                                 let local_view = create_content(
@@ -1285,14 +1368,14 @@ fn main() {
                                 let tab = &tabs[active];
                                 tab.local_navigation.store(false, Ordering::SeqCst);
                                 if matches!(page, Page::Start) {
-                                    tab.view.load_html(include_str!("start.html"))
+                                    tab.view.load_html(start_document(developer))
                                 } else {
                                     tab.view.load_url(&url)
                                 }
                             };
                             if result.is_ok() {
                                 let waits_for_commit = preview && !matches!(page, Page::Start);
-                                if waits_for_commit && is_shared {
+                                if waits_for_commit && (is_shared || changes_local_origin) {
                                     tabs[active].page = Page::Web;
                                     tabs[active].display_url = "about:blank".to_owned();
                                     tabs[active].title = Page::Web.label().to_owned();
@@ -1312,7 +1395,9 @@ fn main() {
                                 attempted_address = Some(value);
                             }
                         } else {
-                            notice = Some(if preview {
+                            notice = Some(if developer {
+                                "Введи адрес локального сервера, например localhost:3000."
+                            } else if preview {
                                 "Этот адрес недоступен. Введи публичный HTTPS-адрес или поисковый запрос."
                             } else {
                                 "Пока доступны Rust, Wikipedia, Excalidraw и local."
@@ -1350,6 +1435,18 @@ fn main() {
                                 "Файл уже сохраняется."
                             });
                         }
+                    }
+                    Command::DeveloperWindow if preview && !private => {
+                        let opened = env::current_exe().and_then(|binary| {
+                            process::Command::new(binary).arg("--developer-preview").spawn()
+                        });
+                        if opened.is_err() {
+                            notice = Some("Не удалось открыть окно разработки.");
+                        }
+                    }
+                    #[cfg(all(target_os = "macos", debug_assertions))]
+                    Command::InspectPage if developer && developer_url(&tabs[active].display_url).is_some() => {
+                        tabs[active].view.open_devtools();
                     }
                     Command::PrivateWindow if preview && !private => {
                         let opened = env::current_exe().and_then(|binary| {
@@ -1420,7 +1517,7 @@ fn main() {
                                         && tab.has_virtual_start_back() =>
                                 {
                                     // Some engines skip load_html in their native history.
-                                    if tab.view.load_html(include_str!("start.html")).is_ok() {
+                                    if tab.view.load_html(start_document(developer)).is_ok() {
                                         tab.local_navigation.store(false, Ordering::SeqCst);
                                         tab.start_forward_url = Some(std::mem::replace(
                                             &mut tab.display_url,
@@ -1592,6 +1689,27 @@ mod tests {
     }
 
     #[test]
+    fn developer_addresses_use_only_explicit_loopback_hosts() {
+        assert_eq!(
+            developer_destination("localhost:3000/docs").unwrap().1,
+            "http://127.0.0.1:3000/docs"
+        );
+        assert_eq!(
+            developer_destination("http://[::1]:8080/").unwrap().1,
+            "http://[::1]:8080/"
+        );
+        for url in [
+            "http://192.168.0.1:3000/",
+            "https://example.org/",
+            "http://@localhost:3000/",
+            "file:///tmp/test",
+        ] {
+            assert!(developer_destination(url).is_none(), "{url}");
+        }
+        assert!(preview_url("http://127.0.0.1:3000/").is_none());
+    }
+
+    #[test]
     fn https_preview_accepts_new_sites_without_widening_normal_navigation() {
         let site = "https://developer.mozilla.org/ru/docs/Web/HTML";
         assert!(navigation_url(site, false).is_none());
@@ -1710,14 +1828,14 @@ mod tests {
 
     #[test]
     fn back_to_embedded_start_restores_display_address() {
-        let (page, url) = loaded_page("https://rust-lang.org/", false, false).unwrap();
+        let (page, url) = loaded_page("https://rust-lang.org/", false, false, false).unwrap();
         assert!(matches!(page, Page::Rust));
         assert_eq!(url, "https://rust-lang.org/");
-        let (page, url) = loaded_page("about:blank", true, false).unwrap();
+        let (page, url) = loaded_page("about:blank", true, false, false).unwrap();
         assert!(matches!(page, Page::Start));
         assert_eq!(url, "search:start");
-        assert!(loaded_page("about:blank", false, false).is_none());
-        let (page, url) = loaded_page("https://rust-lang.org/learn", true, false).unwrap();
+        assert!(loaded_page("about:blank", false, false, false).is_none());
+        let (page, url) = loaded_page("https://rust-lang.org/learn", true, false, false).unwrap();
         assert!(matches!(page, Page::Rust));
         assert_eq!(url, "https://rust-lang.org/learn");
     }

@@ -63,7 +63,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -374,4 +374,11 @@ assert.deepEqual(messages.splice(-2), [
 window.setDownloadActive(true);
 elements.get('download-open').dispatch('click');
 assert.deepEqual(messages.pop(), {type:'cancel-download'});
+elements.get('developer-window').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'developer-window'});
+window.renderSearch({active:0, tabs:[{id:990, label:'Local site', url:'http://127.0.0.1:3000/'}]});
+assert.equal(elements.get('inspect-page').disabled, false);
+elements.get('inspect-page').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'inspect-page'});
+
 console.log('Search chrome keyboard and tab controls passed');
