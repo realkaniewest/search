@@ -198,10 +198,14 @@
   .history-item button:first-child { flex: 1; min-width: 0; text-align: left; }
   .history-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .history-item span + span, .history-empty { color: #acacb3; font-size: 12px; }
+  .developer-preview .composer-engine, .developer-preview .preview-label .private-label { display: none; }
+  .developer-tool, .preview-label .developer-label { display: none; }
+  .developer-tool { font-size: 12px; padding: 0 9px; }
+  .developer-preview .developer-tool, .developer-preview .preview-label .developer-label { display: inline-block; }
   .preview-label { display: none; }
   .https-preview .preview-label { display: inline; color: #bbc5d4; font-size: 11px; }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><button class="tool history-tool" id="history-open" type="button" aria-label="История" title="История">◷</button><button class="tool history-tool" id="bookmark-toggle" type="button" aria-label="Сохранить закладку" title="Сохранить закладку" aria-pressed="false">☆</button><button class="tool history-tool" id="bookmarks-open" type="button" aria-label="Закладки" title="Закладки">▤</button><button class="tool history-tool" id="private-window" type="button" aria-label="Временное окно" title="Временное окно">◐</button><button class="tool history-tool" id="download-open" type="button" aria-label="Скачать по адресу" title="Скачать по адресу">↓</button><span class="preview-label"><span class="standard-label">HTTPS Preview</span><span class="private-label">Временное окно</span></span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><button class="tool history-tool" id="history-open" type="button" aria-label="История" title="История">◷</button><button class="tool history-tool" id="bookmark-toggle" type="button" aria-label="Сохранить закладку" title="Сохранить закладку" aria-pressed="false">☆</button><button class="tool history-tool" id="bookmarks-open" type="button" aria-label="Закладки" title="Закладки">▤</button><button class="tool history-tool" id="private-window" type="button" aria-label="Временное окно" title="Временное окно">◐</button><button class="tool history-tool" id="download-open" type="button" aria-label="Скачать по адресу" title="Скачать по адресу">↓</button><button class="tool history-tool" id="developer-window" type="button" aria-label="Окно разработки" title="Окно разработки">⌘</button><button class="tool developer-tool" id="inspect-page" type="button" disabled>Инспектор</button><span class="preview-label"><span class="standard-label">HTTPS Preview</span><span class="private-label">Временное окно</span><span class="developer-label">Разработка</span></span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" hidden aria-describedby="notice">
 <div id="composer" class="composer" role="dialog" aria-label="Быстрый поиск" aria-modal="true" hidden>
   <div class="composer-row">
@@ -301,6 +305,10 @@
   }
   address.addEventListener('blur', hideAddress);
   const send = value => window.ipc.postMessage(JSON.stringify(value));
+  const developerMode = () => document.documentElement?.classList.contains('developer-preview');
+  const inspectPage = document.getElementById('inspect-page');
+  inspectPage.onclick = () => send({type:'inspect-page'});
+  document.getElementById('developer-window').onclick = () => send({type:'developer-window'});
   document.getElementById('private-window').onclick = () => send({type:'private-window'});
   const downloadDialog = document.getElementById('download-dialog');
   const downloadOpen = document.getElementById('download-open');
@@ -589,7 +597,7 @@
     if (composerOpen) {
       if (e.key === 'Tab') {
         e.preventDefault();
-        const controls = [address, engineToggle, ...(engineMenu.hidden ? [] : engines.map(engine => engine.button))];
+        const controls = developerMode() ? [address] : [address, engineToggle, ...(engineMenu.hidden ? [] : engines.map(engine => engine.button))];
         const index = controls.indexOf(document.activeElement);
         controls[(index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
       } else if (e.key === 'Escape' && !engineMenu.hidden) {
@@ -666,7 +674,7 @@
       if (tab.url === 'search:start') {
         const hint = document.createElement('span');
         hint.className = 'hint';
-        hint.textContent = document.documentElement?.classList.contains('https-preview') ? 'Поиск или адрес' : 'Адрес или сайт';
+        hint.textContent = developerMode() ? 'Локальный адрес' : isPreview() ? 'Поиск или адрес' : 'Адрес или сайт';
         hint.setAttribute('aria-hidden', 'true');
         button.append(hint);
       }
@@ -698,7 +706,7 @@
     }
   }
   window.renderSearch = state => {
-    if (document.documentElement?.classList.contains('https-preview')) address.placeholder = 'Поиск или адрес';
+    if (isPreview()) address.placeholder = developerMode() ? 'localhost:3000' : 'Поиск или адрес';
     const previous = window.searchState;
     const currentId = state.tabs[state.active]?.id;
     const previousId = previous.tabs[previous.active]?.id;
@@ -711,6 +719,7 @@
       });
     window.searchState = state;
     updateBookmarkButton();
+    inspectPage.disabled = !state.tabs[state.active] || !/^https?:/.test(state.tabs[state.active].url) || Boolean(state.tabs[state.active].loading);
     if (tabsChanged) renderTabs(state, previous, activeChanged);
 
     document.getElementById('back').disabled = !state.can_back;
