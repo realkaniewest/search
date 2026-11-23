@@ -2,7 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use std::ptr::{self, NonNull};
+use std::{
+    cell::Cell,
+    ptr::{self, NonNull},
+    rc::Rc,
+};
 
 use block2::RcBlock;
 use objc2::{MainThreadMarker, rc::Retained, runtime::AnyObject};
@@ -56,10 +60,17 @@ fn shortcut(key: &str, flags: Flags, repeating: bool) -> Option<Shortcut> {
 pub(crate) struct Monitor(Retained<AnyObject>);
 
 impl Monitor {
-    pub(crate) fn install(window: &Window, proxy: EventLoopProxy<AppEvent>) -> Option<Self> {
+    pub(crate) fn install(
+        window: &Window,
+        proxy: EventLoopProxy<AppEvent>,
+        enabled: Rc<Cell<bool>>,
+    ) -> Option<Self> {
         let window = window.ns_window();
         let block = RcBlock::new(move |event: NonNull<NSEvent>| {
             let original = event.as_ptr();
+            if !enabled.get() {
+                return original;
+            }
             // AppKit supplies a live NSEvent on the main thread for this callback.
             let event = unsafe { event.as_ref() };
             let Some(main) = MainThreadMarker::new() else {
