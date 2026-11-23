@@ -63,7 +63,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'search-engine', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'private-window'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   getElementById: id => elements.get(id),
@@ -289,9 +289,11 @@ address.value = 'editing current tab';
 window.renderSearch({active: 0, tabs: [secondId, thirdId]});
 assert.equal(address.value, 'editing current tab', 'closing a preceding tab preserves the active draft');
 
-console.log('Search chrome keyboard and tab controls passed');
-
 document.documentElement = {classList: {contains: name => name === 'https-preview'}};
+window.restoreSearchEngine('bing');
+assert.equal(elements.get('engine-mark').dataset.engine, 'bing', 'startup restores the saved search engine');
+assert.equal(elements.get('engine-bing').getAttribute('aria-pressed'), 'true');
+
 const previousTabs = window.searchState.tabs;
 elements.get('add').dispatch('click');
 assert.deepEqual(messages.pop(), {type: 'new'});
@@ -306,3 +308,55 @@ assert.equal(address.hidden, true, 'Escape closes the composer');
 assert.equal(elements.get('composer').hidden, true);
 assert.deepEqual(messages.splice(-2), [{type: 'composer', visible: false}, {type: 'cancel-address'}]);
 assert.equal(window.searchState.tabs.at(-1).id, 900, 'Escape leaves new tab open');
+
+elements.get('add').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'new'});
+window.renderSearch({active: previousTabs.length + 1, tabs: [...previousTabs, newTab, {...newTab, id: 901}]});
+assert.deepEqual(messages.pop(), {type: 'composer', visible: true});
+elements.get('engine-toggle').dispatch('click');
+assert.equal(elements.get('engine-menu').hidden, false);
+elements.get('engine-duckduckgo').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'set-search-engine', engine: 'duckduckgo'});
+assert.equal(elements.get('engine-menu').hidden, true);
+assert.equal(elements.get('engine-mark').dataset.engine, 'duckduckgo');
+assert.equal(document.activeElement, address);
+address.value = 'rust async';
+address.dispatch('keydown', {key: 'Enter'});
+assert.deepEqual(messages.splice(-2), [
+  {type: 'composer', visible: false},
+  {type: 'open', value: 'rust async', engine: 'duckduckgo'},
+]);
+
+elements.get('history-open').dispatch('click');
+assert.deepEqual(messages.splice(-2), [{type: 'composer', visible: true}, {type: 'history-list'}]);
+window.renderHistory([
+  {url: 'https://example.org/', title: 'Example Domain'},
+  {url: 'https://www.rust-lang.org/', title: 'Rust'},
+]);
+assert.equal(elements.get('history-list').children.length, 2);
+const historyFilter = elements.get('history-filter');
+historyFilter.value = 'example';
+historyFilter.dispatch('input');
+assert.equal(elements.get('history-list').children.length, 1);
+elements.get('history-list').children[0].children[1].dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'history-remove', value: 'https://example.org/'});
+elements.get('history-clear').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'history-clear'});
+elements.get('history-close').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'composer', visible: false});
+
+window.renderSearch({active: 0, tabs: [{id: 902, label: 'Example Domain', url: 'https://example.org/'}]});
+elements.get('bookmark-toggle').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'bookmark-toggle'});
+window.renderBookmarks([{url: 'https://example.org/', title: 'Example Domain'}]);
+assert.equal(elements.get('bookmark-toggle').getAttribute('aria-pressed'), 'true');
+elements.get('bookmarks-open').dispatch('click');
+assert.deepEqual(messages.splice(-2), [{type: 'composer', visible: true}, {type: 'bookmarks-list'}]);
+assert.equal(elements.get('history-clear').hidden, true);
+assert.equal(elements.get('history-list').children.length, 1);
+elements.get('history-list').children[0].children[1].dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'bookmark-remove', value: 'https://example.org/'});
+elements.get('history-close').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'composer', visible: false});
+
+console.log('Search chrome keyboard and tab controls passed');

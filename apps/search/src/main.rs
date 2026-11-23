@@ -2,10 +2,18 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+mod bookmarks;
+mod history;
+
+use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
+use history::{History, MAX_HISTORY_BYTES};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 use std::{
-    env, process,
+    env, fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    process,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -46,6 +54,7 @@ enum Mode {
     Smoke,
     SecuritySmoke,
     HttpsPreview,
+    PrivatePreview,
 }
 
 #[derive(Default)]
@@ -88,6 +97,28 @@ enum Command {
         #[serde(default)]
         engine: SearchEngine,
     },
+    #[serde(rename = "private-window")]
+    PrivateWindow,
+    #[serde(rename = "bookmarks-list")]
+    BookmarksList,
+    #[serde(rename = "bookmark-toggle")]
+    BookmarkToggle,
+    #[serde(rename = "bookmark-remove")]
+    BookmarkRemove {
+        value: String,
+    },
+    #[serde(rename = "history-list")]
+    HistoryList,
+    #[serde(rename = "history-clear")]
+    HistoryClear,
+    #[serde(rename = "history-remove")]
+    HistoryRemove {
+        value: String,
+    },
+    #[serde(rename = "set-search-engine")]
+    SetSearchEngine {
+        engine: SearchEngine,
+    },
     #[serde(rename = "cancel-address")]
     CancelAddress,
     Back,
@@ -95,7 +126,7 @@ enum Command {
     Reload,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum SearchEngine {
     #[default]
@@ -117,6 +148,82 @@ impl SearchEngine {
         url.query_pairs_mut().append_pair(parameter, query);
         Some(url)
     }
+}
+
+fn preference_path() -> Option<PathBuf> {
+    let home = PathBuf::from(env::var_os("HOME")?);
+    home.is_absolute()
+        .then(|| home.join("Library/Application Support/Search Preview/search-engine.json"))
+}
+
+fn read_profile_data(path: &Path, limit: usize) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= limit).then_some(bytes)
+}
+
+fn load_search_engine(path: &Path) -> SearchEngine {
+    let mut value = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(64).read_to_end(&mut value))
+        .ok()
+        .and_then(|_| serde_json::from_slice(&value).ok())
+        .unwrap_or_default()
+}
+
+fn save_preference(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    fs::create_dir_all(parent)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let temp = parent.join(format!(".{}-{}.tmp", name.to_string_lossy(), process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    let result = (|| {
+        serde_json::to_writer(&mut file, value)?;
+        file.flush()?;
+        fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedSession {
+    active: usize,
+    tabs: Vec<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn load_session(path: &Path) -> Option<SavedSession> {
+    const MAX_SESSION_BYTES: u64 = 256 * 1024;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_SESSION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SESSION_BYTES {
+        return None;
+    }
+    let mut session: SavedSession = serde_json::from_slice(&bytes).ok()?;
+    session.tabs.truncate(MAX_TABS);
+    if session.tabs.is_empty() {
+        return None;
+    }
+    session.active = session.active.min(session.tabs.len() - 1);
+    Some(session)
 }
 
 #[derive(Debug)]
@@ -561,15 +668,45 @@ fn main() {
         [flag] if flag == "--smoke" => Mode::Smoke,
         [flag] if flag == "--security-smoke" => Mode::SecuritySmoke,
         [flag] if flag == "--https-preview" && HAS_HTTPS_PREVIEW => Mode::HttpsPreview,
+        [flag] if flag == "--private-preview" && HAS_HTTPS_PREVIEW => Mode::PrivatePreview,
         _ => {
             eprintln!("Usage: search-browser [--smoke|--security-smoke]");
             process::exit(2);
         }
     };
-    let preview = mode == Mode::HttpsPreview;
+    let private = mode == Mode::PrivatePreview;
+    let preview = mode == Mode::HttpsPreview || private;
+    let engine_path = if preview && !private {
+        preference_path()
+    } else {
+        None
+    };
+    let session_path = engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("session.json"));
+    let history_path = engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("history.json"));
+    let mut history = history_path
+        .as_deref()
+        .and_then(|path| read_profile_data(path, MAX_HISTORY_BYTES))
+        .and_then(|bytes| History::from_json(&bytes))
+        .unwrap_or_default();
+    let bookmarks_path = engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("bookmarks.json"));
+    let mut bookmarks = bookmarks_path
+        .as_deref()
+        .and_then(|path| read_profile_data(path, MAX_BOOKMARK_BYTES))
+        .and_then(|bytes| Bookmarks::from_json(&bytes))
+        .unwrap_or_default();
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let window_builder = WindowBuilder::new()
-        .with_title("Search")
+        .with_title(if private {
+            "Search · Временное окно"
+        } else {
+            "Search"
+        })
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
         .with_min_inner_size(LogicalSize::new(680.0, 420.0));
     #[cfg(target_os = "macos")]
@@ -619,7 +756,9 @@ fn main() {
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
         .with_html(include_str!("chrome.html"))
-        .with_initialization_script(if preview {
+        .with_initialization_script(if private {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview'));"
+        } else if preview {
             "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview'));"
         } else if cfg!(target_os = "macos") {
             "document.documentElement?.classList.add('mac-toolbar'); document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar'));"
@@ -700,6 +839,58 @@ fn main() {
     let mut attempted_address: Option<String> = None;
     let content_proxy = event_loop.create_proxy();
 
+    #[cfg(target_os = "macos")]
+    if let Some(session) = session_path.as_deref().and_then(load_session) {
+        let mut restored = Vec::with_capacity(session.tabs.len());
+        let shared = shared_start
+            .as_ref()
+            .expect("preview has a shared start view");
+        let _ = shared.0.set_visible(false);
+        for address in &session.tabs {
+            let website = preview_url(address);
+            let destination = website.as_ref().and_then(|(page, url)| {
+                create_content(
+                    &window,
+                    next_id,
+                    content_proxy.clone(),
+                    security_counts.clone(),
+                    (*page, url.as_str(), None),
+                    content_rect,
+                )
+                .ok()
+                .map(|(view, policy)| (Rc::new(view), policy, *page, url.to_string()))
+            });
+            let (view, local_navigation, page, display_url) = destination.unwrap_or_else(|| {
+                (
+                    shared.0.clone(),
+                    shared.1.clone(),
+                    Page::Start,
+                    Page::Start.url().to_owned(),
+                )
+            });
+            let _ = view.set_visible(false);
+            restored.push(Tab {
+                id: next_id,
+                page,
+                display_url,
+                title: page.label().to_owned(),
+                loading: !matches!(page, Page::Start),
+                has_start_entry: matches!(page, Page::Start),
+                pending_start_return: false,
+                start_forward_url: None,
+                view,
+                local_navigation,
+            });
+            next_id += 1;
+        }
+        active = session.active;
+        let _ = restored[active].view.set_visible(true);
+        tabs = restored;
+        if let Some(selection) = &start_selection {
+            selection.store(tabs[active].id, Ordering::Relaxed);
+        }
+    }
+
     if mode == Mode::Smoke {
         // Native WebView creation may block before the event loop can consume
         // readiness callbacks. The wrapper separately bounds total runtime.
@@ -725,6 +916,15 @@ fn main() {
         };
         match command_from_start {
             Event::UserEvent(AppEvent::ChromeReady) => {
+                if let Some(path) = &engine_path {
+                    let engine = load_search_engine(path);
+                    if let Ok(json) = serde_json::to_string(&engine) {
+                        let _ = chrome.evaluate_script(&format!("window.restoreSearchEngine({json})"));
+                    }
+                }
+                if preview && !private && let Ok(json) = serde_json::to_string(bookmarks.entries()) {
+                    let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
+                }
                 if mode == Mode::Smoke { println!("SMOKE: chrome loaded"); }
                 chrome_ready = true;
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
@@ -766,6 +966,17 @@ fn main() {
                         tab.pending_start_return = false;
                         if matches!(page, Page::Start) {
                             tab.title = page.label().to_owned();
+                        }
+                    }
+                    if let Some(path) = &history_path
+                        && let Some((_, visited)) = preview_url(&url)
+                    {
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |elapsed| elapsed.as_secs());
+                        if history.record(&visited, &tab.title, now)
+                            && let Err(error) = save_preference(path, &history)
+                        {
+                            eprintln!("Search could not save history: {error}");
                         }
                     }
                     if chrome_ready {
@@ -1011,6 +1222,65 @@ fn main() {
                             attempted_address = Some(value);
                         }
                     }
+                    Command::PrivateWindow if preview && !private => {
+                        let opened = env::current_exe().and_then(|binary| {
+                            process::Command::new(binary).arg("--private-preview").spawn()
+                        });
+                        if opened.is_err() {
+                            notice = Some("Не удалось открыть временное окно.");
+                        }
+                    }
+                    Command::BookmarksList | Command::BookmarkToggle | Command::BookmarkRemove { .. } if preview && !private => {
+                        let mut updated = bookmarks.clone();
+                        let changed = match command {
+                            Command::BookmarkToggle => {
+                                let current = &tabs[active];
+                                let result = preview_url(&current.display_url)
+                                    .and_then(|(_, url)| updated.toggle(&url, &current.title));
+                                if result.is_none() {
+                                    notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                                }
+                                result.is_some()
+                            }
+                            Command::BookmarkRemove { value } => preview_url(&value)
+                                .is_some_and(|(_, url)| updated.remove(&url)),
+                            _ => false,
+                        };
+                        if changed {
+                            if bookmarks_path.as_ref().is_some_and(|path| save_preference(path, &updated).is_ok()) {
+                                bookmarks = updated;
+                            } else {
+                                notice = Some("Не удалось сохранить изменения в закладках.");
+                            }
+                        }
+                        if let Ok(json) = serde_json::to_string(bookmarks.entries()) {
+                            let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
+                        }
+                    }
+                    Command::HistoryList | Command::HistoryClear | Command::HistoryRemove { .. } if preview && !private => {
+                        let mut updated = history.clone();
+                        let changed = match command {
+                            Command::HistoryClear => updated.clear(),
+                            Command::HistoryRemove { value } => preview_url(&value)
+                                .is_some_and(|(_, url)| updated.remove(&url)),
+                            _ => false,
+                        };
+                        if changed {
+                            if history_path.as_ref().is_some_and(|path| save_preference(path, &updated).is_ok()) {
+                                history = updated;
+                            } else {
+                                notice = Some("Не удалось сохранить изменения в истории.");
+                            }
+                        }
+                        if let Ok(json) = serde_json::to_string(history.entries()) {
+                            let _ = chrome.evaluate_script(&format!("window.renderHistory({json})"));
+                        }
+                    }
+                    Command::SetSearchEngine { engine } => {
+                        if preview && !private && engine_path.as_ref().is_none_or(|path| save_preference(path, &engine).is_err()) {
+                            notice = Some("Не удалось сохранить поисковик. Выбор действует до перезапуска.");
+                        }
+                    }
                     Command::CancelAddress => {}
                     Command::Back => {
                         let tab = &mut tabs[active];
@@ -1090,6 +1360,20 @@ fn main() {
                 event: WindowEvent::CloseRequested,
                 ..
             } => *control_flow = ControlFlow::Exit,
+            Event::LoopDestroyed => {
+                if let Some(path) = &session_path {
+                    let session = SavedSession {
+                        active,
+                        tabs: tabs.iter().map(|tab| {
+                            (tab.display_url.len() <= 16 * 1024).then(|| preview_url(&tab.display_url)).flatten()
+                                .map_or_else(|| Page::Start.url().to_owned(), |(_, url)| url.into())
+                        }).collect(),
+                    };
+                    if let Err(error) = save_preference(path, &session) {
+                        eprintln!("Search could not save its session: {error}");
+                    }
+                }
+            }
             _ => {}
         }
     });
@@ -1135,6 +1419,40 @@ mod tests {
                 "{blocked}"
             );
         }
+    }
+
+    #[test]
+    fn search_engine_preference_survives_reopen_and_handles_invalid_data() {
+        let root = env::temp_dir().join(format!("search-engine-test-{}", process::id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("search-engine.json");
+        assert_eq!(load_search_engine(&path), SearchEngine::Google);
+        save_preference(&path, &SearchEngine::DuckDuckGo).unwrap();
+        assert_eq!(load_search_engine(&path), SearchEngine::DuckDuckGo);
+        save_preference(&path, &SearchEngine::Yandex).unwrap();
+        assert_eq!(load_search_engine(&path), SearchEngine::Yandex);
+        fs::write(&path, br#""unknown""#).unwrap();
+        assert_eq!(load_search_engine(&path), SearchEngine::Google);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn session_load_limits_tabs_and_ignores_broken_files() {
+        let root = env::temp_dir().join(format!("search-session-test-{}", process::id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("session.json");
+        let saved = SavedSession {
+            active: 100,
+            tabs: vec!["https://example.org/".to_owned(); MAX_TABS + 2],
+        };
+        save_preference(&path, &saved).unwrap();
+        let restored = load_session(&path).unwrap();
+        assert_eq!(restored.tabs.len(), MAX_TABS);
+        assert_eq!(restored.active, MAX_TABS - 1);
+        fs::write(&path, b"{").unwrap();
+        assert!(load_session(&path).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
