@@ -23,7 +23,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tao::{
     dpi::{LogicalPosition, LogicalSize},
@@ -49,6 +49,7 @@ use wry::WebViewBuilderExtWindows;
 const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
 const MAX_TABS: usize = 12;
+const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const HAS_HTTPS_PREVIEW: bool = cfg!(all(target_os = "macos", debug_assertions))
     && option_env!("SEARCH_BUILD_HTTPS_PREVIEW").is_some();
 
@@ -268,6 +269,7 @@ enum AppEvent {
         id: u64,
         title: String,
     },
+    NavigationTick,
     SecurityCheck,
     SecurityProgress,
     TimedOut,
@@ -530,11 +532,58 @@ struct Tab {
     display_url: String,
     title: String,
     loading: bool,
+    load_watch: LoadWatch,
     has_start_entry: bool,
     pending_start_return: bool,
     start_forward_url: Option<String>,
     view: Rc<WebView>,
     local_navigation: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct LoadWatch {
+    deadline: Option<Instant>,
+    timed_out: bool,
+}
+
+impl LoadWatch {
+    fn start(&mut self, now: Instant) {
+        self.deadline = Some(now + PAGE_LOAD_TIMEOUT);
+        self.timed_out = false;
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn expire(&mut self, now: Instant) -> bool {
+        if self.deadline.is_some_and(|deadline| now >= deadline) {
+            self.deadline = None;
+            self.timed_out = true;
+            return true;
+        }
+        false
+    }
+}
+
+fn only_fragment_changed(before: &str, after: &str) -> bool {
+    let (Ok(mut before), Ok(mut after)) = (Url::parse(before), Url::parse(after)) else {
+        return false;
+    };
+    if before.fragment() == after.fragment() {
+        return false;
+    }
+    before.set_fragment(None);
+    after.set_fragment(None);
+    before == after
+}
+
+fn load_watch_for_page(page: Page) -> LoadWatch {
+    let mut watch = LoadWatch::default();
+    if !matches!(page, Page::Start) {
+        watch.start(Instant::now());
+    }
+    watch
 }
 
 impl Tab {
@@ -621,7 +670,10 @@ fn sync_chrome(
                 loading: tab.loading,
             })
             .collect(),
-        notice,
+        notice: notice
+            .or(tab.load_watch.timed_out.then_some(
+                "Страница пока не загрузилась. Проверь соединение или повтори переход.",
+            )),
         attempted_address,
     };
     if let Ok(json) = serde_json::to_string(&state) {
@@ -958,6 +1010,7 @@ fn main() {
         display_url: initial_page.url().to_owned(),
         title: initial_page.label().to_owned(),
         loading: false,
+        load_watch: LoadWatch::default(),
         has_start_entry: matches!(initial_page, Page::Start),
         pending_start_return: false,
         start_forward_url: None,
@@ -1027,6 +1080,7 @@ fn main() {
                 display_url,
                 title: page.label().to_owned(),
                 loading: !matches!(page, Page::Start),
+                load_watch: load_watch_for_page(page),
                 has_start_entry: matches!(page, Page::Start),
                 pending_start_return: false,
                 start_forward_url: None,
@@ -1050,6 +1104,18 @@ fn main() {
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(25));
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
+        });
+    }
+
+    if preview {
+        let timer = event_loop.create_proxy();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                if timer.send_event(AppEvent::NavigationTick).is_err() {
+                    break;
+                }
+            }
         });
     }
 
@@ -1107,11 +1173,27 @@ fn main() {
                     *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
+            Event::UserEvent(AppEvent::NavigationTick) if preview => {
+                let now = Instant::now();
+                let mut changed = false;
+                for tab in &mut tabs {
+                    if tab.load_watch.expire(now) {
+                        tab.loading = false;
+                        changed = true;
+                    }
+                }
+                if chrome_ready && changed {
+                    sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
+                }
+            }
             Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
                     && (url == "about:blank" || if developer { developer_url(&url).is_some() } else { navigation_url(&url, preview).is_some() })
                 {
                     tab.loading = true;
+                    if preview && url != "about:blank" && tab.load_watch.deadline.is_none() {
+                        tab.load_watch.start(Instant::now());
+                    }
                     if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
@@ -1133,7 +1215,13 @@ fn main() {
                     content_ready = true;
                 }
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id) {
-                    tab.loading = false;
+                    let finished_start = url == "about:blank" && tab.pending_start_return;
+                    if url != "about:blank" || finished_start || tab.load_watch.deadline.is_none() {
+                        tab.loading = false;
+                        if url != "about:blank" || finished_start {
+                            tab.load_watch.clear();
+                        }
+                    }
                     if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
@@ -1277,6 +1365,7 @@ fn main() {
                                 display_url: url.to_owned(),
                                 title: page.label().to_owned(),
                                 loading: restoring && !matches!(page, Page::Start),
+                                load_watch: if restoring && preview { load_watch_for_page(page) } else { LoadWatch::default() },
                                 has_start_entry: matches!(page, Page::Start),
                                 pending_start_return: false,
                                 start_forward_url: None,
@@ -1375,6 +1464,12 @@ fn main() {
                             };
                             if result.is_ok() {
                                 let waits_for_commit = preview && !matches!(page, Page::Start);
+                                if waits_for_commit && !only_fragment_changed(&tabs[active].display_url, &url) {
+                                    tabs[active].loading = true;
+                                    tabs[active].load_watch.start(Instant::now());
+                                } else {
+                                    tabs[active].load_watch.clear();
+                                }
                                 if waits_for_commit && (is_shared || changes_local_origin) {
                                     tabs[active].page = Page::Web;
                                     tabs[active].display_url = "about:blank".to_owned();
@@ -1526,6 +1621,7 @@ fn main() {
                                         tab.page = Page::Start;
                                         tab.title = Page::Start.label().to_owned();
                                         tab.loading = false;
+                                        tab.load_watch.clear();
                                         tab.pending_start_return = false;
                                     }
                                 }
@@ -1540,6 +1636,8 @@ fn main() {
                     Command::Reload if !matches!(tabs[active].page, Page::Start) => {
                         if tabs[active].view.reload().is_err() {
                             notice = Some("Не удалось обновить страницу.");
+                        } else if preview {
+                            tabs[active].load_watch.start(Instant::now());
                         }
                     }
                     Command::Forward if !tabs[active].loading => {
@@ -1550,6 +1648,7 @@ fn main() {
                                 notice = Some("Чтобы открыть локальную страницу, введи её адрес.");
                             } else if tab.view.load_url(&url).is_ok() {
                                 tab.loading = true;
+                                if preview { tab.load_watch.start(Instant::now()); }
                             } else {
                                 tab.start_forward_url = Some(url);
                                 notice = Some("Не удалось открыть следующую страницу.");
@@ -1686,6 +1785,29 @@ mod tests {
         fs::write(&path, b"{").unwrap();
         assert!(load_session(&path).is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn load_timeout_is_reported_once_and_recovers() {
+        assert!(only_fragment_changed(
+            "https://example.org/#one",
+            "https://example.org/#two"
+        ));
+        assert!(!only_fragment_changed(
+            "https://example.org/a#one",
+            "https://example.org/b#two"
+        ));
+        let start = Instant::now();
+        let mut watch = LoadWatch::default();
+        watch.start(start);
+        assert!(!watch.expire(start + Duration::from_secs(1)));
+        assert!(watch.expire(start + PAGE_LOAD_TIMEOUT));
+        assert!(watch.timed_out);
+        assert!(!watch.expire(start + PAGE_LOAD_TIMEOUT));
+        watch.start(start);
+        assert!(!watch.timed_out);
+        watch.clear();
+        assert!(!watch.expire(start + PAGE_LOAD_TIMEOUT));
     }
 
     #[test]
