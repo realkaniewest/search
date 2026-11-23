@@ -5,6 +5,8 @@
 mod bookmarks;
 mod history;
 #[cfg(target_os = "macos")]
+mod macos_download;
+#[cfg(target_os = "macos")]
 mod macos_shortcuts;
 
 use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
@@ -100,6 +102,14 @@ enum Command {
         #[serde(default)]
         engine: SearchEngine,
     },
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "download-address")]
+    DownloadAddress {
+        value: String,
+    },
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "cancel-download")]
+    CancelDownload,
     #[serde(rename = "private-window")]
     PrivateWindow,
     #[serde(rename = "bookmarks-list")]
@@ -233,6 +243,8 @@ fn load_session(path: &Path) -> Option<SavedSession> {
 enum AppEvent {
     #[cfg(target_os = "macos")]
     NativeShortcut(macos_shortcuts::Shortcut),
+    #[cfg(target_os = "macos")]
+    DownloadFinished(macos_download::Outcome),
     ChromeReady,
     StartLink {
         id: u64,
@@ -876,6 +888,11 @@ fn main() {
     }];
     let mut active = 0usize;
     let mut composer_visible = false;
+    #[cfg(target_os = "macos")]
+    let mut download_job: Option<(
+        Arc<macos_download::DownloadControl>,
+        thread::JoinHandle<()>,
+    )> = None;
     let mut last_closed = None::<(Page, String)>;
     let mut next_id = 2u64;
     let mut chrome_ready = false;
@@ -978,6 +995,19 @@ fn main() {
                     if shortcut.focuses_address() { let _ = chrome.focus(); }
                     let _ = chrome.evaluate_script(&format!("window.searchNativeShortcut({json})"));
                 }
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::DownloadFinished(outcome)) => {
+                if let Some((_, worker)) = download_job.take() { let _ = worker.join(); }
+                use macos_download::Outcome;
+                notice = Some(match outcome {
+                    Outcome::Saved => "Файл сохранён.",
+                    Outcome::Cancelled => "Загрузка отменена.",
+                    Outcome::DestinationExists => "Файл с таким именем уже есть. Выбери другое имя.",
+                    Outcome::Failed => "Не удалось скачать файл по этому адресу.",
+                });
+                let _ = chrome.evaluate_script("window.setDownloadActive(false)");
+                sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
             }
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if let Some(path) = &engine_path {
@@ -1290,6 +1320,37 @@ fn main() {
                             attempted_address = Some(value);
                         }
                     }
+                    #[cfg(target_os = "macos")]
+                    Command::DownloadAddress { value } if preview && !private => {
+                        if download_job.is_none() {
+                            if let Some((_, url)) = preview_url(value.trim()) {
+                                if let Some(destination) = macos_download::choose_destination(&url) {
+                                    let cancel = Arc::new(macos_download::DownloadControl::default());
+                                    let worker = Arc::clone(&cancel);
+                                    let proxy = content_proxy.clone();
+                                    let _ = chrome.evaluate_script("window.setDownloadActive(true)");
+                                    notice = Some("Загрузка файла…");
+                                    let worker = thread::spawn(move || {
+                                        let outcome = macos_download::fetch(&url, &destination, &worker);
+                                        let _ = proxy.send_event(AppEvent::DownloadFinished(outcome));
+                                    });
+                                    download_job = Some((cancel, worker));
+                                }
+                            } else {
+                                notice = Some("Введи прямой публичный HTTPS-адрес файла.");
+                            }
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    Command::CancelDownload if preview => {
+                        if let Some((cancel, _)) = &download_job {
+                            notice = Some(if cancel.cancel() {
+                                "Отменяю загрузку…"
+                            } else {
+                                "Файл уже сохраняется."
+                            });
+                        }
+                    }
                     Command::PrivateWindow if preview && !private => {
                         let opened = env::current_exe().and_then(|binary| {
                             process::Command::new(binary).arg("--private-preview").spawn()
@@ -1431,6 +1492,11 @@ fn main() {
             Event::LoopDestroyed => {
                 #[cfg(target_os = "macos")]
                 drop(shortcut_monitor.take());
+                #[cfg(target_os = "macos")]
+                if let Some((cancel, worker)) = download_job.take() {
+                    cancel.cancel();
+                    let _ = worker.join();
+                }
                 if let Some(path) = &session_path {
                     let session = SavedSession {
                         active,
