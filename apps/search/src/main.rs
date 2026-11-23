@@ -251,6 +251,8 @@ enum AppEvent {
     #[cfg(target_os = "macos")]
     NativeShortcut(macos_shortcuts::Shortcut),
     #[cfg(target_os = "macos")]
+    DownloadDestination(Url, Option<PathBuf>),
+    #[cfg(target_os = "macos")]
     DownloadFinished(macos_download::Outcome),
     ChromeReady,
     StartLink {
@@ -1020,6 +1022,8 @@ fn main() {
     let mut active = 0usize;
     let mut composer_visible = false;
     #[cfg(target_os = "macos")]
+    let mut choosing_download_destination = false;
+    #[cfg(target_os = "macos")]
     let mut download_job: Option<(
         Arc<macos_download::DownloadControl>,
         thread::JoinHandle<()>,
@@ -1138,6 +1142,25 @@ fn main() {
                 if chrome_ready && !composer_visible && let Ok(json) = serde_json::to_string(&shortcut) {
                     if shortcut.focuses_address() { let _ = chrome.focus(); }
                     let _ = chrome.evaluate_script(&format!("window.searchNativeShortcut({json})"));
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::DownloadDestination(url, destination))
+                if choosing_download_destination && download_job.is_none() =>
+            {
+                choosing_download_destination = false;
+                if let Some(destination) = destination {
+                    let cancel = Arc::new(macos_download::DownloadControl::default());
+                    let worker = Arc::clone(&cancel);
+                    let proxy = content_proxy.clone();
+                    let _ = chrome.evaluate_script("window.setDownloadActive(true)");
+                    notice = Some("Загрузка файла…");
+                    let worker = thread::spawn(move || {
+                        let outcome = macos_download::fetch(&url, &destination, &worker);
+                        let _ = proxy.send_event(AppEvent::DownloadFinished(outcome));
+                    });
+                    download_job = Some((cancel, worker));
+                    sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                 }
             }
             #[cfg(target_os = "macos")]
@@ -1502,20 +1525,15 @@ fn main() {
                     }
                     #[cfg(target_os = "macos")]
                     Command::DownloadAddress { value } if preview && !private => {
-                        if download_job.is_none() {
+                        if download_job.is_none() && !choosing_download_destination {
                             if let Some((_, url)) = preview_url(value.trim()) {
-                                if let Some(destination) = macos_download::choose_destination(&url) {
-                                    let cancel = Arc::new(macos_download::DownloadControl::default());
-                                    let worker = Arc::clone(&cancel);
-                                    let proxy = content_proxy.clone();
-                                    let _ = chrome.evaluate_script("window.setDownloadActive(true)");
-                                    notice = Some("Загрузка файла…");
-                                    let worker = thread::spawn(move || {
-                                        let outcome = macos_download::fetch(&url, &destination, &worker);
-                                        let _ = proxy.send_event(AppEvent::DownloadFinished(outcome));
-                                    });
-                                    download_job = Some((cancel, worker));
-                                }
+                                use wry::WebViewExtMacOS;
+                                choosing_download_destination = true;
+                                let proxy = content_proxy.clone();
+                                let request_url = url.clone();
+                                macos_download::choose_destination(&chrome.ns_window(), &url, move |destination| {
+                                    let _ = proxy.send_event(AppEvent::DownloadDestination(request_url.clone(), destination));
+                                });
                             } else {
                                 notice = Some("Введи прямой публичный HTTPS-адрес файла.");
                             }

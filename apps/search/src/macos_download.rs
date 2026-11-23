@@ -12,7 +12,7 @@ use std::{
 };
 
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSModalResponseOK, NSSavePanel};
+use objc2_app_kit::{NSModalResponseOK, NSSavePanel, NSWindow};
 use objc2_foundation::{NSDictionary, NSString, NSURL, NSURLQuarantinePropertiesKey};
 use url::Url;
 
@@ -62,17 +62,34 @@ impl DownloadControl {
     }
 }
 
-pub(crate) fn choose_destination(url: &Url) -> Option<PathBuf> {
-    let panel = NSSavePanel::savePanel(MainThreadMarker::new()?);
+pub(crate) fn choose_destination(
+    window: &NSWindow,
+    url: &Url,
+    complete: impl Fn(Option<PathBuf>) + 'static,
+) {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        complete(None);
+        return;
+    };
+    let panel = NSSavePanel::savePanel(main_thread);
     panel.setMessage(Some(&NSString::from_str(
         "Выбери новое имя файла. Search сохраняет существующие файлы.",
     )));
     panel.setNameFieldStringValue(&NSString::from_str(&suggested_name(url)));
-    if panel.runModal() != NSModalResponseOK {
-        return None;
-    }
-    let path = PathBuf::from(panel.URL()?.path()?.to_string());
-    path.is_absolute().then_some(path)
+    let selected = panel.clone();
+    let callback = block2::RcBlock::new(move |response| {
+        let destination = if response == NSModalResponseOK {
+            selected
+                .URL()
+                .and_then(|url| url.path())
+                .map(|path| PathBuf::from(path.to_string()))
+                .filter(|path| path.is_absolute())
+        } else {
+            None
+        };
+        complete(destination);
+    });
+    panel.beginSheetModalForWindow_completionHandler(window, &callback);
 }
 
 fn suggested_name(url: &Url) -> String {
