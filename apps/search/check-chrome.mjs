@@ -89,6 +89,10 @@ window.renderSearch({active: 0, tabs: [
 ]});
 assert.equal(tabs.children.length, 2);
 const shortcut = options => document.keydown({preventDefault() {}, ...options});
+window.searchNativeShortcut({metaKey: true, key: '['});
+assert.deepEqual(messages.pop(), {type: 'back'});
+window.searchNativeShortcut({metaKey: true, key: ']'});
+assert.deepEqual(messages.pop(), {type: 'forward'});
 shortcut({metaKey: true, shiftKey: true, key: 'T'});
 assert.deepEqual(messages.pop(), {type: 'reopen'});
 shortcut({ctrlKey: true, key: 't'});

@@ -4,6 +4,8 @@
 
 mod bookmarks;
 mod history;
+#[cfg(target_os = "macos")]
+mod macos_shortcuts;
 
 use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
 use history::{History, MAX_HISTORY_BYTES};
@@ -229,11 +231,25 @@ fn load_session(path: &Path) -> Option<SavedSession> {
 
 #[derive(Debug)]
 enum AppEvent {
+    #[cfg(target_os = "macos")]
+    NativeShortcut(macos_shortcuts::Shortcut),
     ChromeReady,
-    StartLink { id: u64, url: String },
-    ContentStarted { id: u64, url: String },
-    ContentLoaded { id: u64, url: String },
-    ContentTitle { id: u64, title: String },
+    StartLink {
+        id: u64,
+        url: String,
+    },
+    ContentStarted {
+        id: u64,
+        url: String,
+    },
+    ContentLoaded {
+        id: u64,
+        url: String,
+    },
+    ContentTitle {
+        id: u64,
+        title: String,
+    },
     SecurityCheck,
     SecurityProgress,
     TimedOut,
@@ -867,6 +883,18 @@ fn main() {
     let mut notice = None;
     let mut attempted_address: Option<String> = None;
     let content_proxy = event_loop.create_proxy();
+    #[cfg(target_os = "macos")]
+    let shortcuts_enabled = Rc::new(std::cell::Cell::new(false));
+    #[cfg(target_os = "macos")]
+    let mut shortcut_monitor = if preview {
+        macos_shortcuts::Monitor::install(
+            &window,
+            event_loop.create_proxy(),
+            shortcuts_enabled.clone(),
+        )
+    } else {
+        None
+    };
 
     #[cfg(target_os = "macos")]
     if let Some(session) = session_path.as_deref().and_then(load_session) {
@@ -944,6 +972,13 @@ fn main() {
             event => event,
         };
         match command_from_start {
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::NativeShortcut(shortcut)) => {
+                if chrome_ready && !composer_visible && let Ok(json) = serde_json::to_string(&shortcut) {
+                    if shortcut.focuses_address() { let _ = chrome.focus(); }
+                    let _ = chrome.evaluate_script(&format!("window.searchNativeShortcut({json})"));
+                }
+            }
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if let Some(path) = &engine_path {
                     let engine = load_search_engine(path);
@@ -956,6 +991,8 @@ fn main() {
                 }
                 if mode == Mode::Smoke { println!("SMOKE: chrome loaded"); }
                 chrome_ready = true;
+                #[cfg(target_os = "macos")]
+                shortcuts_enabled.set(!composer_visible);
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                 if mode == Mode::Smoke && content_ready {
                     println!("PASS: Search chrome and start content loaded");
@@ -1064,6 +1101,8 @@ fn main() {
                     let rect = if visible { full_window_bounds(&window) } else { bounds(&window).0 };
                     if chrome.set_bounds(rect).is_ok() {
                         composer_visible = visible;
+                        #[cfg(target_os = "macos")]
+                        shortcuts_enabled.set(chrome_ready && !visible);
                         let _ = tabs[active].view.set_visible(!visible);
                         if visible {
                             let _ = chrome.focus();
@@ -1390,6 +1429,8 @@ fn main() {
                 ..
             } => *control_flow = ControlFlow::Exit,
             Event::LoopDestroyed => {
+                #[cfg(target_os = "macos")]
+                drop(shortcut_monitor.take());
                 if let Some(path) = &session_path {
                     let session = SavedSession {
                         active,

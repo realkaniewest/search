@@ -508,7 +508,7 @@
       return state.tabs[event.key === '9' ? count - 1 : Number(event.key) - 1];
     }
   }
-  document.addEventListener('keydown', e => {
+  function handleShortcut(e) {
     if (e.isComposing || e.defaultPrevented) return;
     if (historyShowing) {
       if (e.key === 'Escape') {
@@ -538,6 +538,10 @@
       }
       return;
     }
+    if (e.repeat && (e.metaKey || e.ctrlKey) && ['t', 'w'].includes(e.key.toLowerCase())) {
+      e.preventDefault();
+      return;
+    }
     const target = tabShortcut(e, window.searchState);
     if (target) {
       e.preventDefault();
@@ -556,6 +560,10 @@
       else newTab();
     }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='l') { e.preventDefault(); editAddress(); }
+    if(e.metaKey && (e.key === '[' || e.key === ']')) {
+      e.preventDefault();
+      send({type:e.key === '[' ? 'back' : 'forward'});
+    }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='r') { e.preventDefault(); send({type:'reload'}); }
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='w') {
       e.preventDefault();
@@ -563,7 +571,9 @@
       const tab = stateTabs[active];
       if(tab) send({type:'close',id:tab.id});
     }
-  });
+  }
+  document.addEventListener('keydown', handleShortcut);
+  window.searchNativeShortcut = shortcut => handleShortcut({...shortcut, preventDefault() {}});
   const displayAddress = url => url === 'search:start' || url === 'about:blank' ? '' : url ?? '';
   window.searchState = {active:0,tabs:[]};
   function renderTabs(state, previous, activeChanged) {
