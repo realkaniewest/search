@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-src 'none'">
 <style>
   :root { color-scheme: dark; font: 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
   * { box-sizing: border-box; }
@@ -137,10 +137,16 @@
   .engine-menu[hidden] { display: none; }
   .engine-choice { width: 35px; height: 35px; border-color: transparent; background: transparent; font-size: 17px; }
   .engine-choice[aria-pressed="true"] { border-color: #ffffff40; background: #ffffff12; }
-  .engine-mark[data-engine="google"] { color: #87adff; }
-  .engine-mark[data-engine="yandex"] { color: #ff7973; }
-  .engine-mark[data-engine="duckduckgo"] { color: #f8a268; }
-  .engine-mark[data-engine="bing"] { color: #72d6bf; }
+  .engine-mark { width: 19px; height: 19px; background: center / contain no-repeat; }
+  .engine-toggle .engine-mark { width: 23px; height: 23px; }
+  /* https://www.google.com/favicon.ico */
+  .engine-mark[data-engine="google"] { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAAFTElEQVRYCbVXa2xURRg9d2/ZbXe73ZRnoSC1tpTysKU18pCYSoMPUIPxBxpNxNgfKEaboIloSMQAioQfjcYoSogEHyTGGA0Nj+CrAYFi6NrQSKCFSlpaCqVru9tt93E9c+2d3tluZanwbSYz873OuXPnfjOrIUWJx+NZdH3UMIxl7EvY8tm8bEL+ZrvA5tc07Qj7/Q6HQ+j+vxC4KBaL7WbrJ3hKQt8Q2y7GFo6ZAZHcTLKDLZoSahInxkbYtpNIxk0RYcAsBp5JknNMKub6gzkLkpHQEpV0LCPKQb7DiYm22OU2DPx0CJHTpxBtbUE80AMYBhxZPugz8+EsKYOr8mHouTMSQ8G8Xcz5IPdIg92oEBBPTvCjieCxjnYEd36AgbofTUB7ghFjTYPrvgp41r4KPWeaYhYkSGAJ85+3DJIAjR6Cn6RxjmUUffhwLfpqtsEI99vVNxxrGW54178FV8VyxZc4jSSxkDhmQodlJfg7ieChrz9H77a3bxpc5DT6Qxis/81KL3tizCfWJkthrgBZFVF5hkbdMognF+DJJC2/AM57l0CfmgtwyWPtbQQ7hmjzOemevvIJeKvfMO1SOTQgXpSrUEy88yYB7tLdnKyxHMVmu171NIyBsKUyewGYyaTO8oWK3poMnjqO3h1b4Fpagcx16y110p4kdum6XqXxyX2cdJBAuuUZrHkFoR+OW1OzH1c8D76tNdC8VvFTzHJihILQ3B45H21AzBBXIcdBAivt4EZ/C1zFO+G6p0vGOsZPQNbmHTcEFwGpgAs/YrrZrRAERG2XYnTuA/Q43Mvb4Fl1EZrTgOeFdXD4sqXPrRoI7DQmEweLFKP7Zzl2FvcgLTcTThaX2yQlgoA41aQYwSY5FgO9cBGQJtySS+XWYHJDEu3GVS5UzFFy5Ys6oO6qyPC7Fzm0jIIkqcamau8xEgN9shAlWm7HfDA6ggAEAfXiMG6Sgm2EhouLYhjDxOMyy449MiBeiLjJTLC0WuZcGN2d1hQdPU2YHI9inEN5d9J+5M3k3/yFrjiqPlXPjym+EQRaxAr4ZTYOtOwH5PTAwHQ81Z6P2ou/SF2qg5PNsRGus6bKSm/Z/A5WI3GHk6JNWY0I0rC9725s6i1DGDo+avwS18I8+1OUvrCBb05EFO87JjqQk7ACAluswH6WRblWWkYePvFswLfhPJmgOxxA9a9bERjslbrRBhE++ObvBtAdVDfcI+YXPxw1VIprWRHN2+tXwyZg9fy1cKel21X483oLnj34Ouraf1f09sm5nla8uH8f6lsG7WqM92h4bMGIPfQFV6DP3BVkU8iy2EQy0utAax02Hq9RElmTvKxcLM5ZgBmZOTyNNVzpv4bTV5rgv3oWBn96uADuzpehRf8t35ueTMfSouH3T7wI48Rx3Cy3pbi9UvGaBSL6vWe/R03DHrsq5bEW8yKj8yU8X16CNfc7lTgSeI9H8QahlAS4Am4aTpDEPLv3ob+OYkv9xwhF5Taxm0cd65qOquJnUDX/ccWHGH5iLOIKmJcNSUB40VhAIsfooFSjjtBVfOjfi8OXjiLOW/CNpHzyXFSXPofZ2fmKK/N3MvcSgrdYBoWAUJJAKR0PJZIQtsvBLpNEfWcjmgOXcH0gIG7l8Lm8mOmdhtJJs1E5fTGKsu8U7ooIcAI/xLxK3VGcrIlYCfFngmRuiTBXAxOpy2GBjdaTRAYD32eLjJUFYwfZ3mW8+k2PBppMP7QanzFRMFUiwpdtJ2PvSpbTrhuxB+xG+5jJxL1hBUksY2/9PfcN+QTYi41l/j3nu65l6xuy/Wf3D93IfpdmceHIAAAAAElFTkSuQmCC"); }
+  /* https://ya.ru/favicon.ico */
+  .engine-mark[data-engine="yandex"] { background-image: url("data:image/png;base64,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"); }
+  /* https://duckduckgo.com/favicon.ico */
+  .engine-mark[data-engine="duckduckgo"] { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAAHNklEQVRYCY1XW2xVVRr+1j5X2tO7qB3tcIqXKJpYLYxGkwFmEiLGSTpBE0ADPCjRB+MFHtRkBpoxmXkYFRgzOvoiZBw0Aa0yUUYfaI0RI1aPiuCVs1FpC6W0tD2Xnp699/zfOmfts09bhD85e631r3+t/7L+21G4QEh3LWt04uNdIailnocOWEjCQ6M+rjAGF7ankPLg9YXy9T3tPb1jF3K1Oh9RevUtwqj4sGd5G3yG5zsk+x7wsoVId/urH9m/RH5OAagx5o1v8Tz1iLkgfm0napYsw7xFnQjPb4VVU6e33OwECva3mDr+LbKHepE/2m+OwFNqm5Urdrf3pOa0yJwCUGsP0wfkliRvSvz2D2i6635h+isuzwvF4QGM7nkJk+/vM7S2QmT5XNaYJUB67ZIOz3XfkJNJMrxk098RXXC1voiann1nN/JH+lEcHpTfgMZbtXWapmbxMtQuXuoLyv3Bvzxg6GxlWX9s/8+hlJGKY5UAQc3rROvm9Y9pM/OizAkbsWgMFCJzqA/Z/l64mYngXf48sVQstqpkMdIPP9+N7Ce93J9liSoBjq3uTAtRkppQcwI1Hj/wJhrvfRSqdQGiDc2IRqNaq5Fdz5iLNW3wQ/9ovGsjGlau0ejTL3Rjok8/ia3yzo3GJ0LmUHrNTc+KQW6n2S99YgdUJIbRvS9idPdzcMfPIPvB28iKIFP1LYhdvhDR+iYkbl2BiNAXxPmoaRC86QJynx/UNqbTxuWXOfge6Rq9SCi+4/DA/0ivLVA2PbVH24639BtS8zO7niZKQ3R5F1rufhDxphaDqhoDGlbhuWhet0lbgoKeeHyt3henbKdTWly5mN7Ckd5OC/DNx0R7A9GV96D1vifPyZx0zese853PnDPj2J4X9Z10ZvIguN60Dm8rvaGjUcywgUiGGmF070sVB2u6GJesfQhffj2Ed9//BpPZKU0T/Hx/fAQHj4xgeuXGINqfa0cUHyAYHsrC+nRXR2PYyVtdNAOTjNF+suQs+kDoN79HOBxGbW0MKxbNnQeuXNAC/txsC37aW1cRXt9Q+jB0KQh50B9kLak90mUpye0kYYYjZD7p06P5RNqu1FMyoPZDw9XOZuj+uetDscJprYjBzRzPvr1boxhlhBDcpWGlpLB4QKycbMrxqgn0J17rzzc9tQ+JeTF0b1qBRE3Mx3PyYb+t19dIij4XmBTNqCBImu4Iy5jkIposZTt6ahCmy9mOuNs6k3prJnMi/7295N2jew5rGisuTn0dMK8NGN4vTpeHOOKg3mMdKYGXDJsK5xeWGdmtODFeJgbWrVrsz+HIU4z8F8hWC1x3+TeoE18M15dI8z+VmHPlp+5yESNvWuCXYchGoVDQ2a+K8Mg9QKFUC4L4cEQYugAZT4gxJr8K7s6ehyUVjVESeiitYCLBkKrB48jlctUC5ETrMvOcMDr1ZklLau0WKhqbO8zoW9lkTeHNCLRJUDw1832IFRhMY+rsaGluvlF5w1CdXoXkra2yPxbltfjW5wJTVdk7lEDZ9IHPZdGRkyaCjsh8wJgNQvYHseOvkxUUmV/9L+DYZkTnD6BN8ldhuJp5uEFwp4CTPZVjJtTZuBCU56UsF14vFyb8Gu5Yw2UVuIc/RrFYrMKhRqLm+rdQrN2ICb6zhDKZ8kcr8P3p/UFgr0AwvORQXzgUd3u8qdCzzEz00kCm8s+qQRuZTAYNDXL7DCCjsXdmIOdYBuuMb+G822O1v5waE+F38gxrAGH+A1vALseH9FfIj434y+CE5TgI37WG8HOLrnE+mneZGmB4KGla2RNoSstztpGaNYAOQis0rZJgDkDu2FG9mpyewJdnPkOmOKnX8UU3YaTOQjam8PrNEfxjZRT7dX6rHOZdJroqdcbpJoXOA+2vpuwf1nRuVx4ePvnMZlz2t1dQL50MWy42JQT6Qe6W32H/iX3YmX5e465ruAGn8kMYvltaNceFYmWRnaAFyFzfJaHH/pAg/yu2L3wtZXPu28qKOVtlbdMP2GoR2FK1SDNBE9IP8vnqGPti5FMMZQc0LTk7RUfPzySUPsOzvIPAvrCcCe0rXuvXvQDxvgD0BQVnueBsmunk05t1+aT0l/31FSTaFiI3OoIr6q8SDcRrBFxJeZFiRP+SP06h82geidM5NEcu0meM5sPSC1SaUs1Dn+eHFquCmW15659e0O9HIoZi3svh3nfvRG2kHps7/owbL16iz7PrIdRLGJuMx8JGRYzmynKkLU+lNGH5M0sA4tOrO5IeQgdkmuQ62GZzTUdMRAJRQmQAyJDeXnE4tuOO/DEpvXuAdLYFgpvimNvomAbHTobNBHsHZk2jKesIUzmzKU3tx7kcpMNZU85W04abu8w4pwXMJseyNbbKdD3XFwRSZDwXOy3lbJtL6+Ad5xXAELOBdOLsH9UyKHWD6JZkFdX7rKhQtvJUyoEjf89d+Xs+959Rc58Z/w+JkiuYruiDpgAAAABJRU5ErkJggg=="); }
+  /* https://www.bing.com/favicon.ico */
+  .engine-mark[data-engine="bing"] { background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAIAAAAACshmLzAAAEIklEQVRYCc1XT2wUVRj/3psddmnYXbpSYyS1GDi4NEYlEjGrKRpJ44keOKrBC1F74eDF6MGDmuhBSuKVdL1xMAHjQQoJbhUIVkhICISAxjYBNUBxpXX2z8y85++b3bHT7bzptjTRl3z7vnnz/fl9v+/Nmx2htab/cqRMyYcmnYKv6Xvc7wfEj8/u7vnMZPsg68LEwIunnT0IfDIMDhBXoO8/83LPhXBtLWZpCqJ9QVEhXwxCfiqdqn1i8lnNuhEAklGcCF+8VzpRXzMQRgDaI0qQ0dVUG+dj3ISkwIBh4E7OcGvFy0YA2jMDWHGWBAcjAPITvNbw1v8XAG/Absau0/Q07Ma00OUfXxLlbnyiNsanIO4RXLS2EKWCQ2oIMr6zoqZ3TPojC7eW14wAoodQnB4JXUH1BAAsA0qoY0+eaVSK55zdERujagRALnySpB2SqWeVQSA5RIMoNeRJ9d3AhWrlkUt3N7ZNYycjAN1EVQkSRkPfjyP5X8wBJw9ASEWe9FkAxJ9+7PJvvE9ihxmAq0gnSDQaqC8ricqRmGdUH+g820Ll00KVn7k6E8uEGUBC9cxMdICBsQj9reRWi4U0KQKApyAHoz6hbgbQAAMJEgbg+eKQNQ36JxlEm/pgzuA6DUZYMkLvj/qEuhnAChjgYEg+ghYc5jYw9ZqTY0+g8kDWCTWw98b1JXvBDCChemamc1wpra9e37XhoGepXgB4M/O3/634pfEvABtgbNJL9oHxKFbu6l4GN3cUqoPvzjzanPdeqN136VaPf684mi7YGwAAbHQOM4DmUuNO587r0uE/hpvz+pBtp4raFuSvE9SouoVfv2zeeXZU9qWC42qxlxlAo3sG9hyd3eY56gtLyuGUhUPJEqRSgmyAUJD6TDPL1WP50uL0REYAdp6ytTvLg3j1m/ufWpLe1lJmNXa7xK6SyGRhMQUQDEC7lLGo9nV56/Zq1wD6Stn878dmqd7xzIcBRn6oD/sN/whybfaFIIFNJqVoiwYACMpjEJShuiWcsdA3OhufgpP7MuN929Oz2vXIby4IeR493C//RNgTyLeZgyE9APA/qNYsQYOUFlmQFHrSu43OjW8drLBt5zC2gA0f2rfpiJWnd25PzTuu4+ey/enqpudy+czj63tVs9WeIHHw742TAwJ+AKzVCinnSMgDUx/2He1MHF4bP0zYYOQaFTJE0/h4yeJExXcCznoPrx0XLx0ACKSOc7/mkefgMKoRZhnoXk2cdx39+sXP8z+HyeJmYwvY+PgTdA/5XoE6F+fMlLdGq/r29ZzW4v3zH+WeXy45+yYCYIOvijTFIPD6ucXX5oHdTjRR92jL2Q9yXX+4JLYgmmzvZV2wtXoL/xVfI1cVWy1AS+p479f8Cc/Rh0690TsR9elG7xpAN8FWY/MPk+Zwhs2ZdHUAAAAASUVORK5CYII="); }
   @media (prefers-reduced-motion: no-preference) {
     .engine-menu:not([hidden]) { animation: engines-in 160ms cubic-bezier(.2,.8,.25,1); transform-origin: top right; }
     @keyframes engines-in { from { opacity: 0; transform: translateY(-5px) scale(.96); } }
@@ -156,7 +162,7 @@
   }
   .composer .address {
     flex: 1; min-width: 0; height: 100%; padding: 0;
-    border: 0; background: none; font: inherit; font-size: 20px;
+    border: 0; border-radius: 0; background: none; box-shadow: none; font: inherit; font-size: 20px;
     letter-spacing: -.015em; caret-color: #efeff2;
   }
   .composer .address:focus-visible { outline: none; box-shadow: none; }
@@ -172,26 +178,52 @@
     @keyframes veil-in { from { opacity: 0; } }
     @keyframes panel-in { from { opacity: 0; transform: translate(-50%, -12px) scale(.97); } }
   }
-  .search-engine { display: none; color: #e2e7ef; background: #303238; border: 1px solid #ffffff22; border-radius: 9px; padding: 4px; font: inherit; }
-  .https-preview .search-engine { display: inline-block; }
+  .history-tool { display: none; font-size: 16px; }
+  .https-preview .history-tool { display: inline-block; }
+  .private-preview .history-tool, .private-preview .preview-label .standard-label { display: none; }
+  .preview-label .private-label { display: none; }
+  .private-preview .preview-label .private-label { display: inline; color: #c5adf3; }
+  .history-panel {
+    width: min(680px, calc(100% - 48px)); margin: min(12vh, 94px) auto 0;
+    padding: 20px; border-radius: 22px; border: 1px solid #ffffff24;
+    background: #242428; box-shadow: 0 20px 50px #0007;
+  }
+  .history-head { display: flex; align-items: center; gap: 10px; }
+  .history-head h1 { flex: 1; margin: 0; font-size: 18px; font-weight: 600; }
+  .history-action { background: #ffffff10; border: 0; border-radius: 8px; color: inherit; padding: 7px 10px; cursor: pointer; }
+  .history-action:disabled { opacity: .45; cursor: default; }
+  .history-filter { margin: 14px 0 7px; width: 100%; }
+  .history-list { max-height: 56vh; overflow: auto; padding: 3px; }
+  .history-item { display: flex; align-items: center; gap: 7px; border-top: 1px solid #ffffff10; padding: 5px 0; }
+  .history-item button:first-child { flex: 1; min-width: 0; text-align: left; }
+  .history-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history-item span + span, .history-empty { color: #acacb3; font-size: 12px; }
   .preview-label { display: none; }
   .https-preview .preview-label { display: inline; color: #bbc5d4; font-size: 11px; }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><select id="search-engine" class="search-engine" aria-label="Поисковая система"><option value="google">Google</option><option value="yandex">Яндекс</option><option value="duckduckgo">DuckDuckGo</option><option value="bing">Bing</option></select><span class="preview-label">HTTPS Preview</span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><button class="tool history-tool" id="history-open" type="button" aria-label="История" title="История">◷</button><button class="tool history-tool" id="bookmark-toggle" type="button" aria-label="Сохранить закладку" title="Сохранить закладку" aria-pressed="false">☆</button><button class="tool history-tool" id="bookmarks-open" type="button" aria-label="Закладки" title="Закладки">▤</button><button class="tool history-tool" id="private-window" type="button" aria-label="Временное окно" title="Временное окно">◐</button><span class="preview-label"><span class="standard-label">HTTPS Preview</span><span class="private-label">Временное окно</span></span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
 <input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" hidden aria-describedby="notice">
 <div id="composer" class="composer" role="dialog" aria-label="Быстрый поиск" aria-modal="true" hidden>
   <div class="composer-row">
     <div id="composer-panel" class="composer-panel"><span class="composer-icon" aria-hidden="true"></span><kbd class="composer-key" aria-hidden="true">↵</kbd></div>
     <div class="composer-engine">
-      <button id="engine-toggle" class="engine-toggle" type="button" aria-label="Поисковая система: Google" aria-expanded="false" aria-controls="engine-menu"><span id="engine-mark" class="engine-mark" data-engine="google" aria-hidden="true">G</span></button>
+      <button id="engine-toggle" class="engine-toggle" type="button" aria-label="Поисковая система: Google" aria-expanded="false" aria-controls="engine-menu"><span id="engine-mark" class="engine-mark" data-engine="google" aria-hidden="true"></span></button>
       <div id="engine-menu" class="engine-menu" role="group" aria-label="Выбор поисковой системы" hidden>
-        <button id="engine-google" class="engine-choice" type="button" aria-label="Google" title="Google" aria-pressed="true"><span class="engine-mark" data-engine="google" aria-hidden="true">G</span></button>
-        <button id="engine-yandex" class="engine-choice" type="button" aria-label="Яндекс" title="Яндекс" aria-pressed="false"><span class="engine-mark" data-engine="yandex" aria-hidden="true">Я</span></button>
-        <button id="engine-duckduckgo" class="engine-choice" type="button" aria-label="DuckDuckGo" title="DuckDuckGo" aria-pressed="false"><span class="engine-mark" data-engine="duckduckgo" aria-hidden="true">D</span></button>
-        <button id="engine-bing" class="engine-choice" type="button" aria-label="Bing" title="Bing" aria-pressed="false"><span class="engine-mark" data-engine="bing" aria-hidden="true">b</span></button>
+        <button id="engine-google" class="engine-choice" type="button" aria-label="Google" title="Google" aria-pressed="true"><span class="engine-mark" data-engine="google" aria-hidden="true"></span></button>
+        <button id="engine-yandex" class="engine-choice" type="button" aria-label="Яндекс" title="Яндекс" aria-pressed="false"><span class="engine-mark" data-engine="yandex" aria-hidden="true"></span></button>
+        <button id="engine-duckduckgo" class="engine-choice" type="button" aria-label="DuckDuckGo" title="DuckDuckGo" aria-pressed="false"><span class="engine-mark" data-engine="duckduckgo" aria-hidden="true"></span></button>
+        <button id="engine-bing" class="engine-choice" type="button" aria-label="Bing" title="Bing" aria-pressed="false"><span class="engine-mark" data-engine="bing" aria-hidden="true"></span></button>
       </div>
     </div>
   </div>
+</div>
+<div id="history" class="composer" role="dialog" aria-label="История" aria-modal="true" hidden>
+  <section class="history-panel">
+    <div class="history-head"><h1 id="library-title">История</h1><button id="history-clear" class="history-action" type="button">Очистить</button><button id="history-close" class="history-action" type="button" aria-label="Закрыть историю">×</button></div>
+    <input id="history-filter" class="address history-filter" type="search" aria-label="Поиск по истории" placeholder="Поиск по истории">
+    <div id="library-error" class="history-empty" role="alert"></div><div id="history-status" class="history-empty" role="status"></div>
+    <div id="history-list" class="history-list"></div>
+  </section>
 </div>
 <script>
   'use strict';
@@ -215,28 +247,32 @@
   let composerClosing = false;
   const composer = document.getElementById('composer');
   const composerPanel = document.getElementById('composer-panel');
-  const engineSelect = document.getElementById('search-engine');
+  let selectedEngine = 'google';
   const engineToggle = document.getElementById('engine-toggle');
   const engineMenu = document.getElementById('engine-menu');
   const engineMark = document.getElementById('engine-mark');
   const engines = [
-    ['google', 'Google', 'G'], ['yandex', 'Яндекс', 'Я'],
-    ['duckduckgo', 'DuckDuckGo', 'D'], ['bing', 'Bing', 'b'],
-  ].map(([key, name, mark]) => ({key, name, mark, button:document.getElementById(`engine-${key}`)}));
+    ['google', 'Google'], ['yandex', 'Яндекс'],
+    ['duckduckgo', 'DuckDuckGo'], ['bing', 'Bing'],
+  ].map(([key, name]) => ({key, name, button:document.getElementById(`engine-${key}`)}));
   function setEngineMenu(open) {
     engineMenu.hidden = !open;
     engineToggle.setAttribute('aria-expanded', String(open));
   }
   function updateEngine() {
-    const selected = engines.find(engine => engine.key === engineSelect.value) ?? engines[0];
+    const selected = engines.find(engine => engine.key === selectedEngine) ?? engines[0];
     engineMark.dataset.engine = selected.key;
-    engineMark.textContent = selected.mark;
     engineToggle.setAttribute('aria-label', `Поисковая система: ${selected.name}`);
     for (const engine of engines) engine.button.setAttribute('aria-pressed', String(engine === selected));
   }
+  window.restoreSearchEngine = key => {
+    selectedEngine = key;
+    updateEngine();
+  };
   engineToggle.onclick = () => setEngineMenu(engineMenu.hidden);
   for (const engine of engines) engine.button.onclick = () => {
-    engineSelect.value = engine.key;
+    selectedEngine = engine.key;
+    send({type:'set-search-engine', engine:engine.key});
     updateEngine();
     setEngineMenu(false);
     address.focus();
@@ -258,6 +294,114 @@
   }
   address.addEventListener('blur', hideAddress);
   const send = value => window.ipc.postMessage(JSON.stringify(value));
+  document.getElementById('private-window').onclick = () => send({type:'private-window'});
+  const historyLayer = document.getElementById('history');
+  const historyOpen = document.getElementById('history-open');
+  const historyFilter = document.getElementById('history-filter');
+  const historyList = document.getElementById('history-list');
+  const historyClear = document.getElementById('history-clear');
+  const historyClose = document.getElementById('history-close');
+  const historyStatus = document.getElementById('history-status');
+  const libraryError = document.getElementById('library-error');
+  const bookmarksOpen = document.getElementById('bookmarks-open');
+  const bookmarkToggle = document.getElementById('bookmark-toggle');
+  const libraryTitle = document.getElementById('library-title');
+  let historyShowing = false;
+  let libraryKind = 'history';
+  let historyEntries = [];
+  let bookmarkEntries = [];
+  function updateBookmarkButton() {
+    const tab = window.searchState.tabs[window.searchState.active];
+    const url = tab?.url;
+    const saved = bookmarkEntries.some(entry => entry.url === url);
+    bookmarkToggle.disabled = !url?.startsWith('https://') || Boolean(tab.loading);
+    bookmarkToggle.textContent = saved ? '★' : '☆';
+    const name = saved ? 'Удалить закладку' : 'Сохранить закладку';
+    bookmarkToggle.title = name;
+    bookmarkToggle.setAttribute('aria-label', name);
+    bookmarkToggle.setAttribute('aria-pressed', String(saved));
+  }
+  bookmarkToggle.onclick = () => {
+    if (!bookmarkToggle.disabled) send({type:'bookmark-toggle'});
+  };
+  function dismissHistory() {
+    historyShowing = false;
+    historyLayer.hidden = true;
+    send({type:'composer', visible:false});
+    (libraryKind === 'history' ? historyOpen : bookmarksOpen).focus();
+  }
+  function drawHistory() {
+    const query = historyFilter.value.trim().toLocaleLowerCase();
+    const entries = libraryKind === 'history' ? historyEntries : bookmarkEntries;
+    const matches = entries.filter(entry => `${entry.title} ${entry.url}`.toLocaleLowerCase().includes(query));
+    historyClear.hidden = libraryKind !== 'history';
+    historyClear.disabled = historyClear.hidden || historyEntries.length === 0;
+    historyStatus.textContent = matches.length ? '' : query ? 'Ничего не найдено' : libraryKind === 'history' ? 'История пуста' : 'Закладок пока нет';
+    historyList.replaceChildren();
+    for (const entry of matches) {
+      const row = document.createElement('div');
+      row.className = 'history-item';
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'history-action';
+      const title = document.createElement('span');
+      title.textContent = entry.title;
+      const url = document.createElement('span');
+      url.textContent = entry.url;
+      link.append(title, url);
+      link.onclick = () => {
+        dismissHistory();
+        send({type:'open', value:entry.url});
+      };
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'history-action';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', `${libraryKind === 'history' ? 'Удалить из истории' : 'Удалить закладку'}: ${entry.title}`);
+      remove.onclick = () => {
+        historyFilter.focus();
+        send({type:libraryKind === 'history' ? 'history-remove' : 'bookmark-remove', value:entry.url});
+      };
+      row.append(link, remove);
+      historyList.append(row);
+    }
+  }
+  window.renderHistory = entries => {
+    historyEntries = entries;
+    if (historyShowing && libraryKind === 'history') drawHistory();
+  };
+  window.renderBookmarks = entries => {
+    bookmarkEntries = entries;
+    updateBookmarkButton();
+    if (historyShowing && libraryKind === 'bookmarks') drawHistory();
+  };
+  function openLibrary(kind) {
+    libraryKind = kind;
+    const title = kind === 'history' ? 'История' : 'Закладки';
+    libraryTitle.textContent = title;
+    historyLayer.setAttribute('aria-label', title);
+    historyClose.setAttribute('aria-label', kind === 'history' ? 'Закрыть историю' : 'Закрыть закладки');
+    historyFilter.placeholder = kind === 'history' ? 'Поиск по истории' : 'Поиск по закладкам';
+    historyFilter.setAttribute('aria-label', historyFilter.placeholder);
+    historyShowing = true;
+    libraryError.textContent = '';
+    historyLayer.hidden = false;
+    historyFilter.value = '';
+    historyFilter.focus();
+    drawHistory();
+    send({type:'composer', visible:true});
+    send({type:kind === 'history' ? 'history-list' : 'bookmarks-list'});
+  }
+  historyOpen.onclick = () => openLibrary('history');
+  bookmarksOpen.onclick = () => openLibrary('bookmarks');
+  historyClose.onclick = dismissHistory;
+  historyLayer.onclick = event => { if (event.target === historyLayer) dismissHistory(); };
+  historyFilter.addEventListener('input', drawHistory);
+  historyClear.onclick = () => {
+    historyFilter.focus();
+    send({type:'history-clear'});
+  };
+
   function showComposer() {
     composerOpen = true;
     composer.hidden = false;
@@ -336,7 +480,7 @@
     if(e.key!=='Enter' || !address.value.trim()) return;
     const command={type:'open',value:address.value};
     if (document.documentElement?.classList.contains('https-preview')) {
-      command.engine = engineSelect.value;
+      command.engine = selectedEngine;
     }
     const encoder=new TextEncoder();
     if(encoder.encode(address.value).length>1024 || encoder.encode(JSON.stringify(command)).length>2048) {
@@ -366,6 +510,20 @@
   }
   document.addEventListener('keydown', e => {
     if (e.isComposing || e.defaultPrevented) return;
+    if (historyShowing) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        dismissHistory();
+      } else if (e.key === 'Tab') {
+        const controls = [...historyLayer.querySelectorAll('input, button:not(:disabled)')];
+        if (controls.length) {
+          e.preventDefault();
+          const index = controls.indexOf(document.activeElement);
+          controls[(index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length].focus();
+        }
+      }
+      return;
+    }
     if (composerOpen) {
       if (e.key === 'Tab') {
         e.preventDefault();
@@ -480,6 +638,7 @@
         return tab.id !== before.id || tab.label !== before.label || (tab.url === 'search:start') !== (before.url === 'search:start') || tab.loading !== before.loading;
       });
     window.searchState = state;
+    updateBookmarkButton();
     if (tabsChanged) renderTabs(state, previous, activeChanged);
 
     document.getElementById('back').disabled = !state.can_back;
@@ -496,6 +655,7 @@
     if (composeNewTab) showComposer();
     else if (state.attempted_address != null && address.hidden) editAddress();
     notice.textContent=state.notice ?? '';
+    if (historyShowing) libraryError.textContent = state.notice ?? '';
     activity.textContent=!state.notice && state.tabs[state.active]?.loading?'Загрузка страницы…':'';
     address.setAttribute('aria-invalid',state.attempted_address != null?'true':'false');
   };
