@@ -71,6 +71,10 @@ pub(crate) fn choose_destination(
         complete(None);
         return;
     };
+    if window.attachedSheet().is_some() {
+        complete(None);
+        return;
+    }
     let panel = NSSavePanel::savePanel(main_thread);
     panel.setMessage(Some(&NSString::from_str(
         "Выбери новое имя файла. Search сохраняет существующие файлы.",
