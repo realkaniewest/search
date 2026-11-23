@@ -61,6 +61,7 @@ enum Mode {
 struct SecurityCounts {
     fixture_mode: bool,
     https_preview: bool,
+    persistent_site_data: bool,
     blocked_navigation: AtomicUsize,
     blocked_popup: AtomicUsize,
     blocked_download: AtomicUsize,
@@ -557,6 +558,21 @@ fn permits_content_navigation(target: &str, local_navigation: &AtomicBool) -> bo
     }
 }
 
+fn supports_separate_site_data_store() -> bool {
+    cfg!(target_os = "macos")
+        && process::Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+            .is_ok_and(|result| {
+                result.status.success()
+                    && String::from_utf8_lossy(&result.stdout)
+                        .split('.')
+                        .next()
+                        .and_then(|major| major.trim().parse::<u32>().ok())
+                        .is_some_and(|major| major >= 14)
+            })
+}
+
 fn create_content(
     window: &Window,
     #[cfg(target_os = "linux")] fixed: &gtk::Fixed,
@@ -572,13 +588,15 @@ fn create_content(
     let permission_counts = counts.clone();
     let download_counts = counts.clone();
     let popup_counts = counts.clone();
+    let persistent =
+        counts.persistent_site_data && !matches!(page, Page::Start | Page::LocalFixture);
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
     let second_fixture =
         navigation_counts.fixture_mode && id == 2 && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
-        .with_incognito(true)
+        .with_incognito(!persistent)
         .with_permission_handler(move |kind| {
             permission_counts
                 .denied_permission
@@ -644,6 +662,16 @@ fn create_content(
         builder.with_html(include_str!("start.html"))
     } else {
         builder.with_url(initial_url)
+    };
+    #[cfg(target_os = "macos")]
+    let builder = if persistent {
+        use wry::WebViewBuilderExtDarwin;
+        builder.with_data_store_identifier([
+            0x51, 0x86, 0xf1, 0xe4, 0xfc, 0xa0, 0x47, 0xb3, 0xa7, 0x98, 0xc4, 0xe9, 0x1c, 0xe9,
+            0x13, 0x55,
+        ])
+    } else {
+        builder
     };
     #[cfg(target_os = "windows")]
     let builder = builder
@@ -750,6 +778,7 @@ fn main() {
     let security_counts = Arc::new(SecurityCounts {
         fixture_mode: mode == Mode::SecuritySmoke,
         https_preview: preview,
+        persistent_site_data: preview && !private && supports_separate_site_data_store(),
         ..SecurityCounts::default()
     });
     let ready_proxy = proxy.clone();
