@@ -84,7 +84,7 @@ pub struct WryWebViewUIDelegateIvars {
   new_windows: Rc<RefCell<Vec<NewWindow>>>,
   permission_handler: Option<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>,
   #[cfg(target_os = "macos")]
-  media_capture_observer: Option<Box<crate::MediaCaptureObserver>>,
+  native_permission_observer: Option<Box<crate::NativePermissionObserver>>,
 }
 
 define_class!(
@@ -94,6 +94,25 @@ define_class!(
   pub struct WryWebViewUIDelegate;
 
   unsafe impl NSObjectProtocol for WryWebViewUIDelegate {}
+
+  impl WryWebViewUIDelegate {
+    // Public WebKit delegate selector on macOS 27 and later.
+    // Older WebKit versions do not invoke this method.
+    #[cfg(target_os = "macos")]
+    #[unsafe(method(webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:))]
+    fn request_geolocation_permission(
+      &self,
+      _webview: &WryWebView,
+      origin: &WKSecurityOrigin,
+      frame: &WKFrameInfo,
+      decision_handler: &Block<dyn Fn(WKPermissionDecision)>,
+    ) {
+      decision_handler.call((WKPermissionDecision::Deny,));
+      if let Some(observer) = &self.ivars().native_permission_observer {
+        observer(origin, frame, crate::MacosPermissionRequest::Geolocation);
+      }
+    }
+  }
 
   unsafe impl WKUIDelegate for WryWebViewUIDelegate {
     #[cfg(target_os = "macos")]
@@ -173,8 +192,8 @@ define_class!(
 
       (*decision_handler).call((decision,));
       #[cfg(target_os = "macos")]
-      if let Some(observer) = &self.ivars().media_capture_observer {
-        observer(_origin, _frame, capture_type);
+      if let Some(observer) = &self.ivars().native_permission_observer {
+        observer(_origin, _frame, crate::MacosPermissionRequest::MediaCapture(capture_type));
       }
     }
 
@@ -309,7 +328,7 @@ impl WryWebViewUIDelegate {
     mtm: MainThreadMarker,
     new_window_req_handler: Option<Box<dyn Fn(String, NewWindowFeatures) -> NewWindowResponse>>,
     permission_handler: Option<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>,
-    #[cfg(target_os = "macos")] media_capture_observer: Option<Box<crate::MediaCaptureObserver>>,
+    #[cfg(target_os = "macos")] native_permission_observer: Option<Box<crate::NativePermissionObserver>>,
   ) -> Retained<Self> {
     #[cfg(target_os = "ios")]
     let _new_window_req_handler = new_window_req_handler;
@@ -323,7 +342,7 @@ impl WryWebViewUIDelegate {
         new_windows: Rc::new(RefCell::new(vec![])),
         permission_handler,
         #[cfg(target_os = "macos")]
-        media_capture_observer,
+        native_permission_observer,
       });
     unsafe { msg_send![super(delegate), init] }
   }

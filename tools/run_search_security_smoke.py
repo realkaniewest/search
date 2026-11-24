@@ -61,7 +61,7 @@ def fixture_page(file_url, child_url=None):
             typeof event.data?.mediaFrame === 'string') finish(event.data.mediaFrame);
       }}
       window.addEventListener('message', receive);
-      const timeout = setTimeout(() => finish('timeout'), 3500);
+      const timeout = setTimeout(() => finish('timeout'), 6500);
       frame.allow = 'microphone *';
       frame.src = {json.dumps(child_url)};
       document.body.append(frame);
@@ -75,7 +75,7 @@ def fixture_page(file_url, child_url=None):
           return 'granted';
         }}, error => error.name === 'NotAllowedError' || error.name === 'SecurityError'
           ? 'denied' : 'media-error:' + error.name),
-        new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+        new Promise(resolve => setTimeout(() => resolve('timeout'), 6000))
       ]);
     }}
     result.camera = await checkMedia({{video: true}});
@@ -87,9 +87,9 @@ def fixture_page(file_url, child_url=None):
         () => resolve('granted'),
         error => resolve(error.code === 1 ? 'denied'
           : error.code === 2 ? 'unavailable' : error.code === 3 ? 'timeout' : 'error'),
-        {{timeout: 2500}}
+        {{timeout: 6000}}
       )),
-      new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 6000))
     ]);
   }}
   // Both targets are test-owned. The scheme has no registered application.
@@ -152,32 +152,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main():
     command = sys.argv[1:]
-    require_media_origin = command[:1] == ["--require-media-origin"]
-    if require_media_origin:
-        command = command[1:]
+    require_media_origin = False
+    require_geolocation_origin = False
+    while command and command[0] in ("--require-media-origin", "--require-geolocation-origin"):
+        flag = command.pop(0)
+        require_media_origin |= flag == "--require-media-origin"
+        require_geolocation_origin |= flag == "--require-geolocation-origin"
     if not command:
-        print("Usage: run_search_security_smoke.py [--require-media-origin] <binary> [wrapper args]", file=sys.stderr)
+        print("Usage: run_search_security_smoke.py [--require-media-origin] [--require-geolocation-origin] <binary> [wrapper args]", file=sys.stderr)
         return 2
     with tempfile.TemporaryDirectory(prefix="search-navigation-smoke-") as directory:
         canary = Path(directory) / "canary.html"
         canary.write_text("<title>Search file navigation canary</title>", encoding="utf-8")
-        return run_fixture(command + ["--security-smoke"], canary.as_uri(), require_media_origin)
+        return run_fixture(command + ["--security-smoke"], canary.as_uri(), require_media_origin, require_geolocation_origin)
 
 
-def run_fixture(command, file_url, require_media_origin=False):
+def run_fixture(command, file_url, require_media_origin, require_geolocation_origin):
     if require_media_origin:
         with http.server.ThreadingHTTPServer((HOST, MEDIA_FRAME_PORT), Handler) as alternate:
             thread = threading.Thread(target=alternate.serve_forever, daemon=True)
             thread.start()
             try:
-                return run_fixtures(command, file_url, require_media_origin)
+                return run_fixtures(command, file_url, require_media_origin, require_geolocation_origin)
             finally:
                 alternate.shutdown()
                 thread.join()
-    return run_fixtures(command, file_url, require_media_origin)
+    return run_fixtures(command, file_url, require_media_origin, require_geolocation_origin)
 
 
-def run_fixtures(command, file_url, require_media_origin):
+def run_fixtures(command, file_url, require_media_origin, require_geolocation_origin):
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -213,6 +216,12 @@ def run_fixtures(command, file_url, require_media_origin):
             ):
                 print(f"FAIL: WebKit did not report the expected {expected_frame}-frame media origin", file=sys.stderr)
                 return 1
+            if require_geolocation_origin and (
+                "SECURITY: geolocation_origin=primary frame=main frame_origin=primary" not in run.stdout
+                or "SECURITY: geolocation_origin=unexpected" in run.stdout
+            ):
+                print("FAIL: WebKit did not report the expected geolocation origin", file=sys.stderr)
+                return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
                 return 1
@@ -230,6 +239,9 @@ def run_fixtures(command, file_url, require_media_origin):
                 permission_results = {
                     name: result.get(name) for name in ("camera", "microphone", "geolocation")
                 }
+                if require_geolocation_origin and permission_results["geolocation"] != "denied":
+                    print("FAIL: native geolocation denial did not reach the page", file=sys.stderr)
+                    return 1
                 print(f"Permission results: {permission_results}")
                 if (
                     any(

@@ -987,8 +987,8 @@ fn create_content(
     };
     #[cfg(target_os = "macos")]
     let builder = if security_fixture {
-        use wry::WebViewBuilderExtMacos;
-        builder.with_media_capture_observer(|origin, frame, _| {
+        use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
+        builder.with_native_permission_observer(|origin, frame, request| {
             // WebKit supplies these objects only for the duration of this callback.
             let source = |origin: &objc2_web_kit::WKSecurityOrigin| {
                 let (local_host, port) = unsafe {
@@ -1007,7 +1007,11 @@ fn create_content(
             let callback_source = source(origin);
             let frame_source = source(&*unsafe { frame.securityOrigin() });
             let frame_kind = if unsafe { frame.isMainFrame() } { "main" } else { "child" };
-            println!("SECURITY: media_origin={callback_source} frame={frame_kind} frame_origin={frame_source}");
+            let request_kind = match request {
+                MacosPermissionRequest::MediaCapture(_) => "media",
+                MacosPermissionRequest::Geolocation => "geolocation",
+            };
+            println!("SECURITY: {request_kind}_origin={callback_source} frame={frame_kind} frame_origin={frame_source}");
         })
     } else {
         builder

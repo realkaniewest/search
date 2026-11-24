@@ -1589,7 +1589,7 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   #[cfg(target_os = "macos")]
   webview_configuration: Option<Retained<objc2_web_kit::WKWebViewConfiguration>>,
   #[cfg(target_os = "macos")]
-  media_capture_observer: Option<Box<MediaCaptureObserver>>,
+  native_permission_observer: Option<Box<NativePermissionObserver>>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1608,7 +1608,7 @@ impl Default for PlatformSpecificWebViewAttributes {
       #[cfg(target_os = "macos")]
       webview_configuration: None,
       #[cfg(target_os = "macos")]
-      media_capture_observer: None,
+      native_permission_observer: None,
     }
   }
 }
@@ -1664,22 +1664,31 @@ impl WebViewBuilderExtDarwin for WebViewBuilder<'_> {
 }
 
 #[cfg(target_os = "macos")]
-type MediaCaptureObserver = dyn Fn(
+/// Request type provided by the native WKWebView permission delegate.
+pub enum MacosPermissionRequest {
+  /// Camera, microphone, or combined media capture.
+  MediaCapture(objc2_web_kit::WKMediaCaptureType),
+  /// Device location.
+  Geolocation,
+}
+
+#[cfg(target_os = "macos")]
+type NativePermissionObserver = dyn Fn(
   &objc2_web_kit::WKSecurityOrigin,
   &objc2_web_kit::WKFrameInfo,
-  objc2_web_kit::WKMediaCaptureType,
+  MacosPermissionRequest,
 );
 
 #[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
-  /// Observe the native origin and frame of a media capture request after the permission decision.
+  /// Observe the native origin and frame of a permission request after the permission decision.
   /// The observer cannot change the permission decision.
-  fn with_media_capture_observer(
+  fn with_native_permission_observer(
     self,
     observer: impl Fn(
         &objc2_web_kit::WKSecurityOrigin,
         &objc2_web_kit::WKFrameInfo,
-        objc2_web_kit::WKMediaCaptureType,
+        MacosPermissionRequest,
       ) + 'static,
   ) -> Self;
 
@@ -1692,15 +1701,15 @@ pub trait WebViewBuilderExtMacos {
 
 #[cfg(target_os = "macos")]
 impl WebViewBuilderExtMacos for WebViewBuilder<'_> {
-  fn with_media_capture_observer(
+  fn with_native_permission_observer(
     mut self,
     observer: impl Fn(
         &objc2_web_kit::WKSecurityOrigin,
         &objc2_web_kit::WKFrameInfo,
-        objc2_web_kit::WKMediaCaptureType,
+        MacosPermissionRequest,
       ) + 'static,
   ) -> Self {
-    self.platform_specific.media_capture_observer = Some(Box::new(observer));
+    self.platform_specific.native_permission_observer = Some(Box::new(observer));
     self
   }
 
