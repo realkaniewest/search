@@ -1,6 +1,7 @@
 """Check coordinated snapshot writes from independent local processes."""
 
 import json
+import os
 from pathlib import Path
 from subprocess import Popen, PIPE, run
 from tempfile import TemporaryDirectory
@@ -87,4 +88,37 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
                    stdout=PIPE, text=True, timeout=10)
     assert rejected.returncode == 1, rejected.stdout
     assert snapshot.read_bytes() == bad
-    print("PASS: competing writers detected a conflict, offline edits merged, divergent edits conflicted, and corrupt data was untouched")
+    invalid_documents = (
+        {**combined, "version": 2},
+        {**combined, "privateHistory": ["https://example.test/private"]},
+        {**combined, "bookmarks": {"https://user:password@example.test/": "Forbidden"}},
+    )
+    for document in invalid_documents:
+        snapshot.write_text(json.dumps(document), encoding="utf-8")
+        original = snapshot.read_bytes()
+        rejected = run(reconcile, stdout=PIPE, text=True, timeout=10)
+        assert rejected.returncode == 1, rejected.stdout
+        assert snapshot.read_bytes() == original
+
+    saved_pending = pending.read_bytes()
+    pending.write_bytes(b"{}")
+    snapshot.write_bytes(removed)
+    rejected = run(reconcile, stdout=PIPE, text=True, timeout=10)
+    assert rejected.returncode == 1, rejected.stdout
+    assert snapshot.read_bytes() == removed
+    pending.write_bytes(saved_pending)
+
+    target = work / "outside-snapshot.json"
+    target.write_bytes(removed)
+    snapshot.unlink()
+    snapshot.symlink_to(target)
+    rejected = run(reconcile, stdout=PIPE, text=True, timeout=10)
+    assert rejected.returncode == 1 and snapshot.is_symlink(), rejected.stdout
+    assert target.read_bytes() == removed
+
+    snapshot.unlink()
+    os.mkfifo(snapshot)
+    rejected = run(reconcile, stdout=PIPE, text=True, timeout=10)
+    assert rejected.returncode == 1 and snapshot.is_fifo(), rejected.stdout
+
+    print("PASS: competing writers detected a conflict, offline edits merged, divergent edits conflicted, and invalid files were left untouched")

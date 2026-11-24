@@ -2,11 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, you can obtain one at https://mozilla.org/MPL/2.0/.
 
+import Darwin
 import Foundation
 
 enum ProbeError: Error {
     case unsupportedVersion, invalidArguments, staleRevision, coordinationFailed
-    case divergentField(String)
+    case divergentField(String), invalidSnapshotFile, unknownSnapshotFields
 }
 
 enum Palette: String, Codable {
@@ -23,10 +24,25 @@ struct Snapshot: Codable {
     static let maximumBytes = 4 * 1024 * 1024
 
     static func read(_ url: URL) throws -> Snapshot {
-        let handle = try FileHandle(forReadingFrom: url)
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { throw ProbeError.invalidSnapshotFile }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
-        let bytes = try handle.read(upToCount: maximumBytes + 1) ?? Data()
-        guard bytes.count <= maximumBytes else { throw ProbeError.invalidArguments }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_size <= Self.maximumBytes else {
+            throw ProbeError.invalidSnapshotFile
+        }
+        var bytes = Data()
+        while bytes.count <= maximumBytes {
+            let length = min(64 * 1024, maximumBytes + 1 - bytes.count)
+            guard let chunk = try handle.read(upToCount: length), !chunk.isEmpty else { break }
+            bytes.append(chunk)
+        }
+        guard bytes.count <= maximumBytes else { throw ProbeError.invalidSnapshotFile }
+        let expected: Set<String> = ["version", "revision", "palette", "compactTabs", "bookmarks"]
+        guard let fields = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              Set(fields.keys) == expected else { throw ProbeError.unknownSnapshotFields }
         let snapshot = try JSONDecoder().decode(Self.self, from: bytes)
         try snapshot.validate()
         return snapshot
@@ -90,7 +106,7 @@ func reconcile(_ url: URL, base: Snapshot, pending: Snapshot) throws {
         shared.compactTabs = try merge(base.compactTabs, pending.compactTabs, shared.compactTabs, field: "compactTabs")
         for address in Set(base.bookmarks.keys).union(pending.bookmarks.keys).sorted() {
             shared.bookmarks[address] = try merge(base.bookmarks[address], pending.bookmarks[address],
-                                                   shared.bookmarks[address], field: address)
+                                                   shared.bookmarks[address], field: "bookmarks")
         }
     }
 }
