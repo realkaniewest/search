@@ -126,7 +126,7 @@ def run_fixture(command):
     try:
         for attempt in (1, 2):
             try:
-                run = subprocess.run(command, capture_output=True, text=True, timeout=50, check=False)
+                run = subprocess.run(command, capture_output=True, text=True, timeout=65, check=False)
             except subprocess.TimeoutExpired as error:
                 for stream in (error.stdout, error.stderr):
                     if stream:

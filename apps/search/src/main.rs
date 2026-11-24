@@ -272,8 +272,7 @@ enum AppEvent {
         title: String,
     },
     NavigationTick,
-    SecurityCheck,
-    SecurityProgress,
+    SecurityProgress(u64),
     TimedOut,
     Command(Command),
 }
@@ -736,8 +735,7 @@ fn create_content(
         .map(|url| url.origin());
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
-    let second_fixture =
-        navigation_counts.fixture_mode && id == 2 && matches!(page, Page::LocalFixture);
+    let security_fixture = navigation_counts.fixture_mode && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
         .with_incognito(!persistent)
@@ -790,10 +788,9 @@ fn create_content(
                 navigation_counts
                     .blocked_navigation
                     .fetch_add(1, Ordering::SeqCst);
-                // In the two-tab smoke run, the second fixture attempts this
-                // navigation after its report reaches the local server.
-                if second_fixture && target == "https://blocked.invalid/" {
-                    let _ = fixture_proxy.send_event(AppEvent::SecurityProgress);
+                // The fixture attempts this URL only after posting its report.
+                if security_fixture && target == "https://blocked.invalid/" {
+                    let _ = fixture_proxy.send_event(AppEvent::SecurityProgress(id));
                 }
             }
             allowed
@@ -834,13 +831,6 @@ fn create_content(
     return build_view(builder, window, fixed).map(|view| (view, local_navigation));
     #[cfg(not(target_os = "linux"))]
     build_view(builder, window).map(|view| (view, local_navigation))
-}
-
-fn send_security_checkpoint(proxy: &tao::event_loop::EventLoopProxy<AppEvent>, round: u8) {
-    eprintln!("SECURITY: dispatch checkpoint {round}");
-    if proxy.send_event(AppEvent::SecurityCheck).is_err() {
-        eprintln!("SECURITY: event loop closed before checkpoint {round}");
-    }
 }
 
 fn main() {
@@ -917,18 +907,9 @@ fn main() {
     let (chrome_rect, content_rect) = bounds(&window);
     let proxy = event_loop.create_proxy();
     if mode == Mode::SecuritySmoke {
-        for (round, seconds) in [(1, 12), (2, 24)] {
-            let timer_proxy = proxy.clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_secs(seconds));
-                send_security_checkpoint(&timer_proxy, round);
-            });
-        }
-    }
-    if mode == Mode::SecuritySmoke {
         let timer_proxy = proxy.clone();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(34));
+            thread::sleep(Duration::from_secs(50));
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
         });
     }
@@ -1284,10 +1265,9 @@ fn main() {
                     }
                 }
             }
-            Event::UserEvent(signal @ (AppEvent::SecurityCheck | AppEvent::SecurityProgress))
+            Event::UserEvent(AppEvent::SecurityProgress(id))
                 if mode == Mode::SecuritySmoke =>
             {
-                let checkpoint = matches!(signal, AppEvent::SecurityCheck);
                 let (nav, popup, download, permission) = security_counts.snapshot();
                 let title_verified = tabs
                     .first()
@@ -1296,9 +1276,9 @@ fn main() {
                 // WebKitGTK can deny window.open before Wry's popup callback.
                 // The fixture separately checks that no popup was returned.
                 if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
-                    if checkpoint && tabs.len() == 1 && active == 0 {
+                    if id == 1 && tabs.len() == 1 && active == 0 {
                         let _ = content_proxy.send_event(AppEvent::Command(Command::New));
-                    } else if !checkpoint
+                    } else if id == 2
                         && nav >= 2
                         && download >= 2
                         && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
@@ -1306,8 +1286,8 @@ fn main() {
                         println!("PASS: Search security boundary checks");
                         *control_flow = ControlFlow::ExitWithCode(0);
                     }
-                } else if checkpoint {
-                    eprintln!("FAIL: Search security boundary checks incomplete");
+                } else {
+                    eprintln!("SECURITY: fixture {id} reported before readiness");
                     *control_flow = ControlFlow::ExitWithCode(1);
                 }
             }
