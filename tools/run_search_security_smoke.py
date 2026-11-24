@@ -16,6 +16,12 @@ TITLE = "Search security fixture ready"
 
 MEDIA_FRAME = b"""<!doctype html><script>
 (async () => {
+    const geolocation = %%GEOLOCATION%% && navigator.geolocation
+        ? new Promise(resolve => navigator.geolocation.getCurrentPosition(
+            () => resolve('granted'),
+            error => resolve(error.code === 1 ? 'denied' : 'unavailable'),
+            {timeout: 6000}))
+        : Promise.resolve('unavailable');
     let outcome = 'unavailable';
     if (navigator.mediaDevices?.getUserMedia) {
         try {
@@ -27,7 +33,7 @@ MEDIA_FRAME = b"""<!doctype html><script>
                 ? 'denied' : error.name;
         }
     }
-    parent.postMessage({mediaFrame: outcome}, "http://127.0.0.1:43127");
+    parent.postMessage({microphone: outcome, geolocation: await geolocation}, "http://127.0.0.1:43127");
 })();
 </script>"""
 
@@ -48,7 +54,7 @@ def fixture_page(file_url, child_url=None):
   const link = document.createElement('a'); link.href = '/download'; link.download = 'blocked.txt';
   document.body.append(link); link.click();
   if ({json.dumps(child_url is not None)}) {{
-    result.frameMicrophone = await new Promise(resolve => {{
+    const frameResult = await new Promise(resolve => {{
       const frame = document.createElement('iframe');
       function finish(outcome) {{
         window.removeEventListener('message', receive);
@@ -58,14 +64,17 @@ def fixture_page(file_url, child_url=None):
       }}
       function receive(event) {{
         if (event.origin === {json.dumps(child_origin)} && event.source === frame.contentWindow &&
-            typeof event.data?.mediaFrame === 'string') finish(event.data.mediaFrame);
+            typeof event.data?.microphone === 'string' &&
+            typeof event.data?.geolocation === 'string') finish(event.data);
       }}
       window.addEventListener('message', receive);
-      const timeout = setTimeout(() => finish('timeout'), 6500);
-      frame.allow = 'microphone *';
+      const timeout = setTimeout(() => finish({{microphone: 'timeout', geolocation: 'timeout'}}), 6500);
+      frame.allow = 'microphone *; geolocation *';
       frame.src = {json.dumps(child_url)};
       document.body.append(frame);
     }});
+    result.frameMicrophone = frameResult.microphone;
+    result.frameGeolocation = frameResult.geolocation;
   }}
   if (navigator.mediaDevices?.getUserMedia) {{
     async function checkMedia(constraints) {{
@@ -112,12 +121,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
     page = b""
     results = []
     downloads = 0
+    frame_geolocation = False
 
     def do_GET(self):
         if self.path == "/":
             data, kind = type(self).page, "text/html; charset=utf-8"
         elif self.path == "/media-frame":
-            data, kind = MEDIA_FRAME, "text/html; charset=utf-8"
+            data = MEDIA_FRAME.replace(b"%%GEOLOCATION%%", b"true" if self.frame_geolocation else b"false")
+            kind = "text/html; charset=utf-8"
         elif self.path == "/download":
             type(self).downloads += 1
             data, kind = b"blocked download", "application/octet-stream"
@@ -168,7 +179,7 @@ def main():
 
 
 def run_fixture(command, file_url, require_media_origin, require_geolocation_origin):
-    if require_media_origin:
+    if require_media_origin or require_geolocation_origin:
         with http.server.ThreadingHTTPServer((HOST, MEDIA_FRAME_PORT), Handler) as alternate:
             thread = threading.Thread(target=alternate.serve_forever, daemon=True)
             thread.start()
@@ -185,11 +196,13 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for attempt in (range(3) if require_media_origin else range(2)):
+        verify_origins = require_media_origin or require_geolocation_origin
+        Handler.frame_geolocation = require_geolocation_origin
+        for attempt in range(3 if verify_origins else 2):
             # WebKit can reuse an earlier denial within a view. A fresh process
             # keeps the first request attributable to the intended frame.
-            child_frame = require_media_origin and attempt > 0
-            alternate = require_media_origin and attempt == 2
+            child_frame = verify_origins and attempt > 0
+            alternate = verify_origins and attempt == 2
             expected_frame = "child" if child_frame else "main"
             expected_origin = "alternate" if alternate else "primary"
             child_url = f"http://{HOST}:{MEDIA_FRAME_PORT if alternate else PORT}/media-frame"
@@ -210,14 +223,14 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                 print("FAIL: Search did not confirm boundary checks", file=sys.stderr)
                 return 1
             if require_media_origin and (
-                f"SECURITY: media_origin=primary frame={expected_frame} frame_origin={expected_origin}" not in run.stdout
+                run.stdout.count(f"SECURITY: media_origin=primary frame={expected_frame} frame_origin={expected_origin}") < 2
                 or "SECURITY: media_origin=unexpected" in run.stdout
                 or "frame_origin=unexpected" in run.stdout
             ):
                 print(f"FAIL: WebKit did not report the expected {expected_frame}-frame media origin", file=sys.stderr)
                 return 1
             if require_geolocation_origin and (
-                "SECURITY: geolocation_origin=primary frame=main frame_origin=primary" not in run.stdout
+                run.stdout.count(f"SECURITY: geolocation_origin=primary frame={expected_frame} frame_origin={expected_origin}") < 2
                 or "SECURITY: geolocation_origin=unexpected" in run.stdout
             ):
                 print("FAIL: WebKit did not report the expected geolocation origin", file=sys.stderr)
@@ -233,7 +246,10 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                     if result.get(check) is not True:
                         print(f"FAIL: {check} unverified: {result!r}", file=sys.stderr)
                         return 1
-                if child_frame and result.get("frameMicrophone") != "denied":
+                if child_frame and require_geolocation_origin and result.get("frameGeolocation") != "denied":
+                    print(f"FAIL: unexpected child-frame geolocation result: {result.get('frameGeolocation')}", file=sys.stderr)
+                    return 1
+                if child_frame and require_media_origin and result.get("frameMicrophone") != "denied":
                     print(f"FAIL: unexpected child-frame media result: {result.get('frameMicrophone')}", file=sys.stderr)
                     return 1
                 permission_results = {
