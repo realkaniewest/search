@@ -6,7 +6,13 @@ import AppKit
 import WebKit
 
 enum ProbeError: Error {
-    case controllerIsolation, contextStillLoaded, unexpectedMarker(String)
+    case controllerIsolation, contextStillLoaded, unexpectedMarker(String), unexpectedPermissionState
+}
+
+struct FixturePermissions: Codable {
+    let allowed: URL
+    let denied: URL
+    let grantAllowed: Bool
 }
 
 @MainActor
@@ -61,7 +67,7 @@ Task { @MainActor in
             exit(1)
         }
     }
-    guard CommandLine.arguments.count == 4,
+    guard CommandLine.arguments.count == 6,
           let profileID = UUID(uuidString: CommandLine.arguments[3]),
           let allowed = URL(string: CommandLine.arguments[1]), allowed.host == "localhost",
           let denied = URL(string: CommandLine.arguments[2]), denied.host == "127.0.0.1",
@@ -69,6 +75,10 @@ Task { @MainActor in
         print("Run this probe with run.py")
         exit(2)
     }
+    let phase = CommandLine.arguments[4]
+    guard ["initial", "restart", "revoked"].contains(phase) else { exit(2) }
+    let restart = phase != "initial"
+    let state = URL(fileURLWithPath: CommandLine.arguments[5])
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     var status: Int32 = 1
     do {
@@ -82,6 +92,7 @@ Task { @MainActor in
             .write(to: folder.appendingPathComponent("marker.js"), atomically: true, encoding: .utf8)
         let item = try await WKWebExtension(resourceBaseURL: folder)
         let context = WKWebExtensionContext(for: item)
+        context.uniqueIdentifier = "org.search.local-extension-probe"
         let controller = WKWebExtensionController(configuration: .nonPersistent())
         let normalConfig = WKWebViewConfiguration()
         normalConfig.websiteDataStore = WKWebsiteDataStore(forIdentifier: profileID)
@@ -99,33 +110,55 @@ Task { @MainActor in
               isolated.configuration.webExtensionController == nil else {
             throw ProbeError.controllerIsolation
         }
-        context.setPermissionStatus(.grantedExplicitly, for: allowed)
-        context.setPermissionStatus(.deniedExplicitly, for: denied)
-        try await check("allowed site", url: allowed, in: normal, marked: true)
-        try await check("denied site", url: denied, in: normal, marked: false)
-        let navigation = Navigation()
-        try await navigation.load(allowed.appendingPathComponent("frames"), in: normal)
-        let frameResult = try await normal.callAsyncJavaScript("""
-            for (let attempt = 0; attempt < 30; attempt++) {
-                const {allowed, denied} = window.frameReports;
-                if (typeof allowed === 'boolean' && typeof denied === 'boolean') {
-                    return allowed === true && denied === false;
-                }
-                await new Promise(resolve => setTimeout(resolve, 100));
+        let decisions: FixturePermissions
+        if restart {
+            try await check("fresh controller before restoring permissions", url: allowed, in: normal, marked: false)
+            decisions = try JSONDecoder().decode(FixturePermissions.self, from: Data(contentsOf: state))
+            guard decisions.allowed == allowed, decisions.denied == denied,
+                  decisions.grantAllowed == (phase == "restart") else {
+                throw ProbeError.unexpectedPermissionState
             }
-            return false;
-            """, arguments: [:], in: nil, contentWorld: .page)
-        guard frameResult as? Bool == true else {
-            throw ProbeError.unexpectedMarker("same-origin and cross-origin frames")
+        } else {
+            decisions = FixturePermissions(allowed: allowed, denied: denied, grantAllowed: true)
         }
-        try await check("isolated Search chrome", url: allowed.appendingPathComponent("chrome"), in: isolated, marked: false)
-        try await check("private view", url: allowed, in: privateView, marked: false)
-        context.setPermissionStatus(.deniedExplicitly, for: allowed)
-        try await check("revoked site", url: allowed, in: normal, marked: false)
+        context.setPermissionStatus(decisions.grantAllowed ? .grantedExplicitly : .deniedExplicitly, for: decisions.allowed)
+        context.setPermissionStatus(.deniedExplicitly, for: decisions.denied)
+        if phase == "revoked" {
+            try await check("revocation after second restart", url: allowed, in: normal, marked: false)
+        } else {
+            try await check("allowed site", url: allowed, in: normal, marked: true)
+            try await check("denied site", url: denied, in: normal, marked: false)
+            let navigation = Navigation()
+            try await navigation.load(allowed.appendingPathComponent("frames"), in: normal)
+            let frameResult = try await normal.callAsyncJavaScript("""
+                for (let attempt = 0; attempt < 30; attempt++) {
+                    const {allowed, denied} = window.frameReports;
+                    if (typeof allowed === 'boolean' && typeof denied === 'boolean') {
+                        return allowed === true && denied === false;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                return false;
+                """, arguments: [:], in: nil, contentWorld: .page)
+            guard frameResult as? Bool == true else {
+                throw ProbeError.unexpectedMarker("same-origin and cross-origin frames")
+            }
+            try await check("isolated Search chrome", url: allowed.appendingPathComponent("chrome"), in: isolated, marked: false)
+            try await check("private view", url: allowed, in: privateView, marked: false)
+            if !restart {
+                try JSONEncoder().encode(decisions).write(to: state, options: .atomic)
+            }
+            context.setPermissionStatus(.deniedExplicitly, for: allowed)
+            try await check("revoked site", url: allowed, in: normal, marked: false)
+            if restart {
+                let revoked = FixturePermissions(allowed: allowed, denied: denied, grantAllowed: false)
+                try JSONEncoder().encode(revoked).write(to: state, options: .atomic)
+            }
+        }
         try controller.unload(context)
         guard !context.isLoaded else { throw ProbeError.contextStillLoaded }
         status = 0
-        print("PASS: WebKit executed the marker only for the allowed site and frame, and stopped after revocation")
+        print("PASS: WebKit extension permissions, phase \(phase)")
     } catch {
         print("Extension test failed:", error)
     }

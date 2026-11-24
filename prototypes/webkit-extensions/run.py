@@ -3,6 +3,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from subprocess import run
+from tempfile import TemporaryDirectory
 from threading import Thread
 from uuid import uuid4
 
@@ -50,16 +51,20 @@ addEventListener('load', () => setTimeout(() => {
 if __name__ == "__main__":
     profile = str(uuid4())
     probe = ["swift", str(Path(__file__).with_name("probe.swift"))]
-    with ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as server:
+    with (
+        TemporaryDirectory(prefix="search-extension-probe-") as temp,
+        ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as server,
+    ):
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         port = server.server_port
         try:
-            result = run(
-                [*probe, f"http://localhost:{port}/", f"http://127.0.0.1:{port}/", profile],
-                timeout=30,
-                check=False,
-            )
+            state = str(Path(temp) / "permissions.json")
+            arguments = [*probe, f"http://localhost:{port}/", f"http://127.0.0.1:{port}/", profile]
+            for phase in ("initial", "restart", "revoked"):
+                result = run([*arguments, phase, state], timeout=30, check=False)
+                if result.returncode:
+                    break
         finally:
             server.shutdown()
             thread.join()
