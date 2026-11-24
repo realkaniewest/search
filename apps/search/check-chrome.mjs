@@ -86,7 +86,7 @@ class ResizeObserver {
   observe() {}
 }
 const controls = new Map([
-  ['engine', {value:'google'}], ['private_engine', {value:'google'}], ['palette', {value:'graphite'}],
+  ['engine', {value:'google'}], ['private_engine', {value:'google'}], ['palette', {value:'graphite'}], ['page_zoom', {value:'100'}], ['download_folder', {value:'recent'}],
   ...['compact_tabs', 'reduced_motion', 'opaque_toolbar', 'restore_tabs', 'record_history'].map(name => [name, {type:'checkbox'}]),
 ]);
 elements.get('settings-form').elements = { namedItem: name => controls.get(name) };
@@ -94,7 +94,7 @@ elements.get('settings-form').querySelectorAll = () => [];
 runInNewContext(script, { document, window, Number, JSON, TextEncoder, ResizeObserver,
   matchMedia: () => ({matches: false}) });
 const savedSettings = {engine:'google', private_engine:'duckduckgo', palette:'system', compact_tabs:true,
-  reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true};
+  reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent'};
 window.renderSettings(savedSettings, true, null);
 assert.equal(document.documentElement.dataset.palette, 'paper');
 assert.equal(document.documentElement.getAttribute('data-compact'), '');
