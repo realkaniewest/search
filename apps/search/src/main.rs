@@ -273,6 +273,7 @@ enum AppEvent {
     },
     NavigationTick,
     SecurityProgress(u64),
+    SecurityTick,
     TimedOut,
     Command(Command),
 }
@@ -909,7 +910,13 @@ fn main() {
     if mode == Mode::SecuritySmoke {
         let timer_proxy = proxy.clone();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(50));
+            let deadline = Instant::now() + Duration::from_secs(50);
+            while Instant::now() < deadline {
+                thread::sleep(Duration::from_secs(1));
+                if timer_proxy.send_event(AppEvent::SecurityTick).is_err() {
+                    return;
+                }
+            }
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
         });
     }
@@ -1013,6 +1020,8 @@ fn main() {
     let mut next_id = 2u64;
     let mut chrome_ready = false;
     let mut content_ready = false;
+    let mut security_reports = [false; 2];
+    let mut second_fixture_requested = false;
     let mut notice = None;
     let mut attempted_address: Option<String> = None;
     let content_proxy = event_loop.create_proxy();
@@ -1265,33 +1274,35 @@ fn main() {
                     }
                 }
             }
-            Event::UserEvent(AppEvent::SecurityProgress(id))
-                if mode == Mode::SecuritySmoke =>
-            {
+            Event::UserEvent(AppEvent::SecurityProgress(id)) if mode == Mode::SecuritySmoke => {
+                if let 1..=2 = id {
+                    security_reports[id as usize - 1] = true;
+                }
+            }
+            Event::UserEvent(AppEvent::SecurityTick) if mode == Mode::SecuritySmoke => {
                 let (nav, popup, download, permission) = security_counts.snapshot();
-                let title_verified = tabs
-                    .first()
-                    .is_some_and(|tab| tab.title == "Search security fixture ready");
-                println!("SECURITY: fixture_loaded={content_ready} title_verified={title_verified} blocked_navigation={nav} blocked_popup={popup} blocked_download={download} denied_permission={permission}");
-                // WebKitGTK can deny window.open before Wry's popup callback.
-                // The fixture separately checks that no popup was returned.
-                if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
-                    if id == 1 && tabs.len() == 1 && active == 0 {
-                        let _ = content_proxy.send_event(AppEvent::Command(Command::New));
-                    } else if id == 2
-                        && nav >= 2
-                        && download >= 2
-                        && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
-                    {
-                        println!("PASS: Search security boundary checks");
-                        *control_flow = ControlFlow::ExitWithCode(0);
-                    }
-                } else {
-                    eprintln!("SECURITY: fixture {id} reported before readiness");
-                    *control_flow = ControlFlow::ExitWithCode(1);
+                let first_ready = content_ready && chrome_ready && tabs.first().is_some_and(
+                    |tab| tab.title == "Search security fixture ready"
+                );
+                // Wait for both the page report and the asynchronous WebView callbacks.
+                if first_ready && nav > 0 && download > 0 && security_reports[0]
+                    && !second_fixture_requested
+                {
+                    second_fixture_requested = true;
+                    let _ = content_proxy.send_event(AppEvent::Command(Command::New));
+                }
+                if first_ready && security_reports == [true; 2] && nav >= 2 && download >= 2
+                    && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
+                {
+                    println!("SECURITY: blocked_navigation={nav} blocked_popup={popup} blocked_download={download} denied_permission={permission}");
+                    println!("PASS: Search security boundary checks");
+                    *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
             Event::UserEvent(AppEvent::TimedOut) => {
+                if mode == Mode::SecuritySmoke {
+                    eprintln!("SECURITY: reports={security_reports:?} chrome_ready={chrome_ready} content_ready={content_ready} counts={:?}", security_counts.snapshot());
+                }
                 eprintln!("FAIL: Search first window did not load before the test deadline");
                 *control_flow = ControlFlow::ExitWithCode(1);
             }
