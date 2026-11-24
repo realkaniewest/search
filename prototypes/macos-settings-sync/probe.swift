@@ -6,6 +6,7 @@ import Foundation
 
 enum ProbeError: Error {
     case unsupportedVersion, invalidArguments, staleRevision, coordinationFailed
+    case divergentField(String)
 }
 
 enum Palette: String, Codable {
@@ -19,31 +20,48 @@ struct Snapshot: Codable {
     var compactTabs: Bool
     var bookmarks: [String: String]
 
+    static let maximumBytes = 4 * 1024 * 1024
+
     static func read(_ url: URL) throws -> Snapshot {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-        let limit = 4 * 1024 * 1024
-        let bytes = try handle.read(upToCount: limit + 1) ?? Data()
-        guard bytes.count <= limit else { throw ProbeError.invalidArguments }
+        let bytes = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+        guard bytes.count <= maximumBytes else { throw ProbeError.invalidArguments }
         let snapshot = try JSONDecoder().decode(Self.self, from: bytes)
-        guard snapshot.version == 1 else { throw ProbeError.unsupportedVersion }
+        try snapshot.validate()
         return snapshot
     }
 
+    func validate() throws {
+        guard version == 1 else { throw ProbeError.unsupportedVersion }
+        guard bookmarks.count <= 500, bookmarks.allSatisfy({ address, title in
+            guard address.utf8.count <= 1024, title.utf8.count <= 512,
+                  let url = URL(string: address), url.absoluteString == address,
+                  url.scheme == "https", url.host?.isEmpty == false, url.user == nil, url.password == nil
+            else { return false }
+            return true
+        }) else { throw ProbeError.invalidArguments }
+    }
+
     func write(_ url: URL) throws {
-        try JSONEncoder().encode(self).write(to: url, options: .atomic)
+        try validate()
+        let data = try JSONEncoder().encode(self)
+        guard data.count <= Self.maximumBytes else { throw ProbeError.invalidArguments }
+        try data.write(to: url, options: .atomic)
     }
 }
 
-func update(_ url: URL, expected: UUID, change: @escaping (inout Snapshot) -> Void) throws {
+func mutate(_ url: URL, change: @escaping (inout Snapshot) throws -> Void) throws {
     let coordinator = NSFileCoordinator(filePresenter: nil)
     var coordinationError: NSError?
     var result: Result<Void, Error>?
     coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { coordinatedURL in
         result = Result {
             var current = try Snapshot.read(coordinatedURL)
-            guard current.revision == expected else { throw ProbeError.staleRevision }
-            change(&current)
+            let before = current
+            try change(&current)
+            guard before.palette != current.palette || before.compactTabs != current.compactTabs ||
+                    before.bookmarks != current.bookmarks else { return }
             current.revision = UUID()
             try current.write(coordinatedURL)
         }
@@ -51,6 +69,30 @@ func update(_ url: URL, expected: UUID, change: @escaping (inout Snapshot) -> Vo
     if let coordinationError { throw coordinationError }
     guard let result else { throw ProbeError.coordinationFailed }
     try result.get()
+}
+
+func update(_ url: URL, expected: UUID, change: @escaping (inout Snapshot) -> Void) throws {
+    try mutate(url) { current in
+        guard current.revision == expected else { throw ProbeError.staleRevision }
+        change(&current)
+    }
+}
+
+func merge<Value: Equatable>(_ base: Value, _ pending: Value, _ shared: Value, field: String) throws -> Value {
+    if pending == base { return shared }
+    if shared == base || shared == pending { return pending }
+    throw ProbeError.divergentField(field)
+}
+
+func reconcile(_ url: URL, base: Snapshot, pending: Snapshot) throws {
+    try mutate(url) { shared in
+        shared.palette = try merge(base.palette, pending.palette, shared.palette, field: "palette")
+        shared.compactTabs = try merge(base.compactTabs, pending.compactTabs, shared.compactTabs, field: "compactTabs")
+        for address in Set(base.bookmarks.keys).union(pending.bookmarks.keys).sorted() {
+            shared.bookmarks[address] = try merge(base.bookmarks[address], pending.bookmarks[address],
+                                                   shared.bookmarks[address], field: address)
+        }
+    }
 }
 
 do {
@@ -72,9 +114,16 @@ do {
               bookmark.scheme == "https", bookmark.host != nil, bookmark.user == nil, bookmark.password == nil
         else { throw ProbeError.invalidArguments }
         try update(url, expected: revision) { $0.bookmarks[bookmark.absoluteString] = arguments[4] }
+    case "reconcile" where arguments.count == 4:
+        let base = try Snapshot.read(URL(fileURLWithPath: arguments[2]))
+        let pending = try Snapshot.read(URL(fileURLWithPath: arguments[3]))
+        try reconcile(url, base: base, pending: pending)
     default:
         throw ProbeError.invalidArguments
     }
+} catch ProbeError.divergentField(let field) {
+    print("conflict: \(field)")
+    exit(3)
 } catch ProbeError.staleRevision {
     print("conflict")
     exit(3)

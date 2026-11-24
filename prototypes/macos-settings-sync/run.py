@@ -45,10 +45,46 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     assert combined["palette"] == current["palette"]
     assert combined["bookmarks"] == {"https://example.test/": "Fixture", address: "Second"}
 
+    base = work / "base.json"
+    pending = work / "pending.json"
+    base.write_bytes(snapshot.read_bytes())
+    pending.write_bytes(base.read_bytes())
+    # The offline device edits only its local snapshot, then the other device
+    # makes an unrelated update in the shared folder.
+    run([binary, "palette", pending, combined["revision"], "system"], check=True, timeout=10)
+    third_address = "https://example.test/third"
+    run([*bookmark, combined["revision"], third_address, "Third"], check=True, timeout=10)
+    reconcile = [binary, "reconcile", snapshot, base, pending]
+    run(reconcile, check=True, timeout=10)
+    saved = snapshot.read_bytes()
+    merged = json.loads(saved)
+    assert merged["palette"] == "system"
+    assert merged["bookmarks"] == {**combined["bookmarks"], third_address: "Third"}
+    run(reconcile, check=True, timeout=10)
+    assert snapshot.read_bytes() == saved
+
+    pending_before = pending.read_bytes()
+    run([binary, "palette", snapshot, merged["revision"], "graphite"], check=True, timeout=10)
+    divergent = snapshot.read_bytes()
+    conflict = run(reconcile, stdout=PIPE, text=True, timeout=10)
+    assert (conflict.returncode, conflict.stdout.strip()) == (3, "conflict: palette")
+    assert (snapshot.read_bytes(), pending.read_bytes()) == (divergent, pending_before)
+    combined = json.loads(divergent)
+    base.write_bytes(divergent)
+    without_first = {**combined, "bookmarks": {**combined["bookmarks"]}}
+    del without_first["bookmarks"]["https://example.test/"]
+    pending.write_text(json.dumps(without_first), encoding="utf-8")
+    run(reconcile, check=True, timeout=10)
+    removed = snapshot.read_bytes()
+    run(reconcile, check=True, timeout=10)
+    assert snapshot.read_bytes() == removed
+    combined = json.loads(removed)
+    assert combined["bookmarks"] == without_first["bookmarks"]
+
     bad = b'{"version":1'
     snapshot.write_bytes(bad)
     rejected = run([binary, "palette", snapshot, combined["revision"], "graphite"],
                    stdout=PIPE, text=True, timeout=10)
     assert rejected.returncode == 1, rejected.stdout
     assert snapshot.read_bytes() == bad
-    print("PASS: competing writers detected a conflict, retry preserved both edits, and corrupt data was untouched")
+    print("PASS: competing writers detected a conflict, offline edits merged, divergent edits conflicted, and corrupt data was untouched")
