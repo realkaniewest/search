@@ -5,9 +5,9 @@
   :root { color-scheme: dark; font: 13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
   * { box-sizing: border-box; }
   body { margin: 0; background: transparent; color: #f2f2f2; overflow: hidden; }
-  .bar { position: relative; height: 50px; display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 78px; border-bottom: 1px solid #ffffff12; background: linear-gradient(112deg, #292c32d9, #202126e6); }
+  .bar { position: relative; height: 50px; display: flex; align-items: center; gap: 6px; padding: 4px 12px; border-bottom: 1px solid #ffffff12; background: linear-gradient(112deg, #292c32d9, #202126e6); }
   @media (prefers-reduced-transparency: reduce) { .bar { background: #272930; } }
-  .navigation { display: flex; flex: none; gap: 2px; margin-right: 6px; }
+  .tool-group { display: flex; flex: none; gap: 1px; border-radius: 11px; background: #ffffff07; box-shadow: inset 0 0 0 1px #ffffff0a; }
   .tab-strip {
     --strip-width: 240px;
     display: flex;
@@ -19,7 +19,7 @@
   .tab-strip:has(.tab:nth-child(2)) { --strip-width: 480px; }
   .tab-strip:has(.tab:nth-child(3)) { --strip-width: 640px; }
   .tab-strip:has(.tab:nth-child(4)) { --strip-width: 820px; }
-  .tab-scroll { min-width: 24px; padding: 0; font-size: 17px; }
+  .tab-scroll { min-width: 24px; padding: 0; }
   .tab-scroll[hidden] { display: none; }
   .tabs { display: flex; min-width: 0; flex: 1; gap: 0; overflow-x: auto; scrollbar-width: none; border-radius: 19px; background: #ffffff0e; }
   .tabs::-webkit-scrollbar { display: none; }
@@ -35,8 +35,11 @@
   .tab .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; text-align: left; }
   .tab .close { flex: none; width: 25px; height: 25px; border: 0; border-radius: 50%; background: none; color: inherit; opacity: .6; font-size: 17px; cursor: pointer; }
   .tab .close:hover { background: #ffffff22; opacity: 1; }
-  .tool { flex: none; height: 32px; min-width: 32px; border: 0; border-radius: 12px; color: #c9c9cb; background: transparent; cursor: pointer; font-size: 21px; }
-  .reload { font-size: 17px; }
+  .tool { display: inline-grid; place-items: center; flex: none; height: 32px; min-width: 30px; padding: 0; border: 0; border-radius: 10px; color: #c4c5ca; background: transparent; cursor: pointer; }
+  .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  #bookmark-toggle[aria-pressed="true"] .icon { fill: currentColor; }
+  #download-open .icon-cancel, #download-open[data-active="true"] .icon-download { display: none; }
+  #download-open[data-active="true"] .icon-cancel { display: block; }
   .tool:disabled { opacity: .45; cursor: default; }
   .tool:enabled:hover,.tab:hover { background: #ffffff17; }
   .address { width: clamp(190px,29vw,410px); height: 32px; border-radius: 16px; border: 1px solid #ffffff38; background: linear-gradient(#ffffff16, #ffffff06); color: #f2f2f2; padding: 0 12px; outline: none; box-shadow: inset 0 1px #ffffff14; }
@@ -47,10 +50,10 @@
   .bar:has(.notice:not(:empty)) { align-items: flex-start; padding-top: 3px; }
   .activity { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   :focus-visible { outline: 2px solid #d0d0d2; outline-offset: 2px; }
-  @media(max-width:820px) { .bar { padding-left: 16px; gap: 5px; } .navigation { margin-right: 1px; } .tab { flex-basis: 110px; } .address { width: 190px; } }
+  @media(max-width:820px) { .bar { padding-left: 16px; gap: 5px; } .tab { flex-basis: 110px; } .address { width: 190px; } }
   .mac-toolbar .bar { padding-left: 82px; }
 
-  .navigation, #add {
+  #add {
     border-radius: 13px;
     background: #ffffff08;
     box-shadow: inset 0 1px #ffffff0d;
@@ -179,7 +182,7 @@
     @keyframes panel-in { from { opacity: 0; transform: translate(-50%, -12px) scale(.97); } }
   }
   .history-tool { display: none; font-size: 16px; }
-  .https-preview .history-tool { display: inline-block; }
+  .https-preview .history-tool { display: flex; }
   .private-preview .history-tool, .private-preview .preview-label .standard-label { display: none; }
   .preview-label .private-label { display: none; }
   .private-preview .preview-label .private-label { display: inline; color: #c5adf3; }
@@ -203,9 +206,41 @@
   .developer-tool { font-size: 12px; padding: 0 9px; }
   .developer-preview .developer-tool, .developer-preview .preview-label .developer-label { display: inline-block; }
   .preview-label { display: none; }
-  .https-preview .preview-label { display: inline; color: #bbc5d4; font-size: 11px; }
+  .https-preview .preview-label { display: inline; flex: none; color: #aeb3bc; font-size: 11px; white-space: nowrap; }
+  @media (max-width: 620px) {
+    .bar { gap: 4px; padding-right: 6px; }
+    .tool { min-width: 25px; }
+    .tool-group { gap: 0; }
+    .https-preview .preview-label { font-size: 10px; }
+  }
 </style>
-<div class="bar"><div class="navigation"><button class="tool" id="back" disabled aria-label="Назад">‹</button><button class="tool" id="forward" disabled aria-label="Вперёд">›</button><button class="tool reload" id="reload" aria-label="Обновить страницу" title="Обновить страницу">↻</button></div><div class="tab-strip"><button class="tool tab-scroll" id="tabs-left" aria-label="Прокрутить вкладки влево" hidden>‹</button><div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div><button class="tool tab-scroll" id="tabs-right" aria-label="Прокрутить вкладки вправо" hidden>›</button></div><button class="tool" id="add" aria-label="Новая вкладка">+</button><button class="tool history-tool" id="history-open" type="button" aria-label="История" title="История">◷</button><button class="tool history-tool" id="bookmark-toggle" type="button" aria-label="Сохранить закладку" title="Сохранить закладку" aria-pressed="false">☆</button><button class="tool history-tool" id="bookmarks-open" type="button" aria-label="Закладки" title="Закладки">▤</button><button class="tool history-tool" id="private-window" type="button" aria-label="Временное окно" title="Временное окно">◐</button><button class="tool history-tool" id="download-open" type="button" aria-label="Скачать по адресу" title="Скачать по адресу">↓</button><button class="tool history-tool" id="developer-window" type="button" aria-label="Окно разработки" title="Окно разработки">⌘</button><button class="tool developer-tool" id="inspect-page" type="button" disabled>Инспектор</button><span class="preview-label"><span class="standard-label">HTTPS Preview</span><span class="private-label">Временное окно</span><span class="developer-label">Разработка</span></span><span class="activity" id="activity" role="status" aria-live="polite"></span><span class="notice" id="notice" role="status" aria-live="polite"></span></div>
+<div class="bar">
+  <div class="navigation tool-group">
+    <button class="tool" id="back" type="button" aria-label="Назад" title="Назад" disabled><svg class="icon icon-back" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m10 4-4 4 4 4"/></svg></button>
+    <button class="tool" id="forward" type="button" aria-label="Вперёд" title="Вперёд" disabled><svg class="icon icon-forward" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 4 4 4-4 4"/></svg></button>
+    <button class="tool" id="reload" type="button" aria-label="Обновить страницу" title="Обновить страницу"><svg class="icon icon-reload" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13.5 7.5a5.5 5.5 0 1 0-1.2 4M13.5 3.5v4h-4"/></svg></button>
+  </div>
+  <div class="tab-strip">
+    <button class="tool tab-scroll" id="tabs-left" type="button" aria-label="Прокрутить вкладки влево" title="Прокрутить вкладки влево" hidden><svg class="icon icon-back" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m10 4-4 4 4 4"/></svg></button>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Вкладки"></div>
+    <button class="tool tab-scroll" id="tabs-right" type="button" aria-label="Прокрутить вкладки вправо" title="Прокрутить вкладки вправо" hidden><svg class="icon icon-forward" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 4 4 4-4 4"/></svg></button>
+  </div>
+  <button class="tool" id="add" type="button" aria-label="Новая вкладка" title="Новая вкладка"><svg class="icon icon-add" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.5v9m-4.5-4.5h9"/></svg></button>
+  <div class="tool-group history-tool">
+    <button class="tool" id="history-open" type="button" aria-label="История" title="История"><svg class="icon icon-clock" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.9v3.4l2.3 1.4"/></svg></button>
+    <button class="tool" id="bookmark-toggle" type="button" aria-label="Сохранить закладку" title="Сохранить закладку" aria-pressed="false"><svg class="icon icon-bookmark" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 3.2c0-.4.3-.7.7-.7h6.6c.4 0 .7.3.7.7v10.3L8 11l-4 2.5Z"/></svg></button>
+    <button class="tool" id="bookmarks-open" type="button" aria-label="Закладки" title="Закладки"><svg class="icon icon-library" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><path d="M6 3.5v9m2.5-6h2.7m-2.7 3h2.7"/></svg></button>
+  </div>
+  <div class="tool-group history-tool">
+    <button class="tool" id="private-window" type="button" aria-label="Временное окно" title="Временное окно"><svg class="icon icon-private" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.3 13 4v3.6c0 2.8-2.2 5-5 6.2-2.8-1.2-5-3.4-5-6.2V4Z"/><path d="M8 5.2v4.6"/></svg></button>
+    <button class="tool" id="download-open" type="button" aria-label="Скачать по адресу" title="Скачать по адресу"><svg class="icon icon-download" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.5v7m-2.8-2.8L8 9.5l2.8-2.8M3 11v2h10v-2"/></svg><svg class="icon icon-cancel" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button>
+    <button class="tool" id="developer-window" type="button" aria-label="Окно разработки" title="Окно разработки"><svg class="icon icon-code" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m5 5-3 3 3 3m6-6 3 3-3 3M9.3 3.5l-2.6 9"/></svg></button>
+  </div>
+  <button class="tool developer-tool" id="inspect-page" type="button" disabled>Инспектор</button>
+  <span class="preview-label"><span class="standard-label" title="Режим просмотра HTTPS">Превью</span><span class="private-label">Временное окно</span><span class="developer-label">Разработка</span></span>
+  <span class="activity" id="activity" role="status" aria-live="polite"></span>
+  <span class="notice" id="notice" role="status" aria-live="polite"></span>
+</div>
 <input class="address" id="address" aria-label="Адрес" placeholder="Адрес или сайт" hidden aria-describedby="notice">
 <div id="composer" class="composer" role="dialog" aria-label="Быстрый поиск" aria-modal="true" hidden>
   <div class="composer-row">
@@ -326,7 +361,7 @@
   window.setDownloadActive = active => {
     downloadActive = active;
     const label = active ? 'Отменить загрузку' : 'Скачать по адресу';
-    downloadOpen.textContent = active ? '×' : '↓';
+    downloadOpen.dataset.active = String(active);
     downloadOpen.setAttribute('aria-label', label);
     downloadOpen.title = label;
   };
@@ -373,7 +408,6 @@
     const url = tab?.url;
     const saved = bookmarkEntries.some(entry => entry.url === url);
     bookmarkToggle.disabled = !url?.startsWith('https://') || Boolean(tab.loading);
-    bookmarkToggle.textContent = saved ? '★' : '☆';
     const name = saved ? 'Удалить закладку' : 'Сохранить закладку';
     bookmarkToggle.title = name;
     bookmarkToggle.setAttribute('aria-label', name);
