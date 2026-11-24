@@ -213,8 +213,46 @@
     .tool-group { gap: 0; }
     .https-preview .preview-label { font-size: 10px; }
   }
+
+  #settings-open { display: none; }
+  .https-preview:not(.private-preview) #settings-open { display: inline-grid; }
+  #settings { position: fixed; inset: 50px 0 0; overflow: auto; background: var(--settings-bg); color: var(--settings-text); }
+  :root { --settings-bg: #16181d; --settings-card: #20242c; --settings-line: #3a424f; --settings-text: #edf0f6; --settings-muted: #b3bccc; --settings-accent: #bbd9ff; --settings-ink: #132646; }
+  :root[data-palette="midnight"] { --settings-bg: #0c1424; --settings-card: #15223a; --settings-line: #364d70; --settings-accent: #afd6ff; }
+  :root[data-palette="paper"] { --settings-bg: #edeae2; --settings-card: #fcfaf4; --settings-line: #bcb9ae; --settings-text: #22241e; --settings-muted: #53564d; --settings-accent: #244d41; --settings-ink: #ffffff; }
+  .settings-shell { max-width: 920px; margin: auto; padding: clamp(16px, 4vw, 44px); }
+  .settings-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .settings-top h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -.045em; }
+  .settings-top button, .settings-shell select, .settings-shell input[type="search"], .settings-actions button { border: 1px solid var(--settings-line); border-radius: 8px; padding: 8px 12px; color: inherit; background: var(--settings-card); font: inherit; }
+  .settings-top button, .settings-actions button { cursor: pointer; min-height: 36px; }
+  .settings-shell :focus-visible { outline-color: var(--settings-accent); }
+  #settings-filter { margin: 18px 0 10px; width: 100%; }
+  #settings-filter::placeholder { color: var(--settings-muted); }
+  .settings-shell fieldset { min-width: 0; margin: 16px 0; padding: 4px 14px; border: 1px solid var(--settings-line); border-radius: 12px; background: var(--settings-card); }
+  .settings-shell legend { padding: 0 6px; margin-left: -6px; font-weight: 650; font-size: 15px; }
+  .setting-row { display: flex; align-items: center; justify-content: space-between; min-height: 48px; gap: 16px; padding: 8px 0; }
+  .setting-row + .setting-row { border-top: 1px solid var(--settings-line); }
+  .setting-row[hidden] { display: none; }
+  .setting-row small { display: block; margin-top: 4px; color: var(--settings-muted); line-height: 1.4; }
+  .setting-row input { width: 18px; height: 18px; accent-color: var(--settings-accent); flex: none; }
+  .settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+  .settings-actions button[type="submit"] { background: var(--settings-accent); color: var(--settings-ink); font-weight: 650; }
+  .settings-actions button:disabled { opacity: .55; cursor: default; }
+  #settings-status { color: var(--settings-muted); }
+  :root[data-palette="midnight"] .bar { background: linear-gradient(110deg,#253958ee,#101a30ee); }
+  :root[data-palette="paper"] .bar { background: #d9d5ca; }
+  :root[data-palette="paper"] .bar :is(.tool,.tab,.address,.preview-label) { color: #272b25; }
+  :root[data-palette="paper"] .tab.active { background: #faf7ee; }
+  :root[data-palette="paper"] .tab .dot.loading { border-color: #425e54; border-top-color: transparent; }
+  :root[data-palette="paper"] .bar :focus-visible { outline-color: #244d41; }
+  :root[data-compact] .tab { flex-basis: 100px; height: 28px; }
+  :root[data-opaque] .bar { background: #272930; }
+  :root[data-opaque][data-palette="midnight"] .bar { background: #172640; }
+  :root[data-opaque] .composer { backdrop-filter: none; -webkit-backdrop-filter: none; background: #14161d; }
+  :root[data-opaque][data-palette="paper"] .bar { background: #d9d5ca; }
+  :root[data-quiet] *, :root[data-quiet] *::before { animation: none !important; transition: none !important; }
 </style>
-<div class="bar">
+<div class="bar" id="toolbar">
   <div class="navigation tool-group">
     <button class="tool" id="back" type="button" aria-label="Назад" title="Назад" disabled><svg class="icon icon-back" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m10 4-4 4 4 4"/></svg></button>
     <button class="tool" id="forward" type="button" aria-label="Вперёд" title="Вперёд" disabled><svg class="icon icon-forward" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 4 4 4-4 4"/></svg></button>
@@ -236,6 +274,7 @@
     <button class="tool" id="download-open" type="button" aria-label="Скачать по адресу" title="Скачать по адресу"><svg class="icon icon-download" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.5v7m-2.8-2.8L8 9.5l2.8-2.8M3 11v2h10v-2"/></svg><svg class="icon icon-cancel" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button>
     <button class="tool" id="developer-window" type="button" aria-label="Окно разработки" title="Окно разработки"><svg class="icon icon-code" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m5 5-3 3 3 3m6-6 3 3-3 3M9.3 3.5l-2.6 9"/></svg></button>
   </div>
+  <button class="tool" id="settings-open" type="button" aria-label="Настройки Search" title="Настройки Search"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h10M6 2.5v3M10 6.5v3M6 10.5v3"/></svg></button>
   <button class="tool developer-tool" id="inspect-page" type="button" disabled>Инспектор</button>
   <span class="preview-label"><span class="standard-label" title="Режим просмотра HTTPS">Превью</span><span class="private-label">Временное окно</span><span class="developer-label">Разработка</span></span>
   <span class="activity" id="activity" role="status" aria-live="polite"></span>
@@ -271,6 +310,30 @@
     <button id="download-save" class="history-action" type="submit">Выбрать место сохранения</button>
   </form>
 </div>
+<section id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+  <div class="settings-shell">
+    <header class="settings-top"><h1 id="settings-title">Настройки Search</h1><button id="settings-close" type="button">Готово</button></header>
+    <input id="settings-filter" type="search" aria-label="Найти настройку" placeholder="Найти настройку">
+    <p id="settings-empty" hidden>Ничего не найдено.</p>
+    <form id="settings-form">
+      <fieldset><legend>Оформление</legend>
+        <label class="setting-row"><span>Цвет панели</span><select name="palette"><option value="graphite">Графит</option><option value="midnight">Полночь</option><option value="paper">Бумага</option><option value="system">Как в системе</option></select></label>
+        <label class="setting-row"><span>Компактные вкладки<small>На панели помещается больше вкладок.</small></span><input type="checkbox" name="compact_tabs"></label>
+        <label class="setting-row"><span>Меньше движения<small>Отключает анимации панели и окна быстрого поиска.</small></span><input type="checkbox" name="reduced_motion"></label>
+        <label class="setting-row"><span>Непрозрачная панель<small>Убирает прозрачность панели и размытие в диалогах.</small></span><input type="checkbox" name="opaque_toolbar"></label>
+      </fieldset>
+      <fieldset><legend>Поиск</legend>
+        <label class="setting-row"><span>Поисковик в обычном окне</span><select name="engine"><option value="google">Google</option><option value="yandex">Яндекс</option><option value="duckduckgo">DuckDuckGo</option><option value="bing">Bing</option></select></label>
+        <label class="setting-row"><span>Поисковик во временном окне</span><select name="private_engine"><option value="google">Google</option><option value="yandex">Яндекс</option><option value="duckduckgo">DuckDuckGo</option><option value="bing">Bing</option></select></label>
+      </fieldset>
+      <fieldset><legend>Запуск и история</legend>
+        <label class="setting-row"><span>Восстанавливать вкладки<small>Если выключено, следующий запуск начнётся с новой вкладки.</small></span><input type="checkbox" name="restore_tabs"></label>
+        <label class="setting-row"><span>Записывать историю<small>Управляет записью новых посещений. Старые записи можно удалить в истории.</small></span><input type="checkbox" name="record_history"></label>
+      </fieldset>
+      <div class="settings-actions"><button id="settings-save" type="submit" disabled>Применить</button><button id="settings-reset" type="button">По умолчанию</button><span id="settings-status" role="status"></span></div>
+    </form>
+  </div>
+</section>
 <script>
   'use strict';
   const tabs = document.getElementById('tabs'), address = document.getElementById('address'), notice = document.getElementById('notice'), activity = document.getElementById('activity');
@@ -516,7 +579,7 @@
       send({type:'composer', visible:false});
       done();
     };
-    if (!composerPanel.animate || matchMedia('(prefers-reduced-motion: reduce)').matches || !editorTab) {
+    if (!composerPanel.animate || appliedSettings.reduced_motion || matchMedia('(prefers-reduced-motion: reduce)').matches || !editorTab) {
       finish();
       return;
     }
@@ -600,8 +663,126 @@
       return state.tabs[event.key === '9' ? count - 1 : Number(event.key) - 1];
     }
   }
+  const toolbar = document.getElementById('toolbar');
+  const settingsDialog = document.getElementById('settings');
+  const settingsOpen = document.getElementById('settings-open');
+  const settingsClose = document.getElementById('settings-close');
+  const settingsFilter = document.getElementById('settings-filter');
+  const settingsForm = document.getElementById('settings-form');
+  const settingsSave = document.getElementById('settings-save');
+  const settingsStatus = document.getElementById('settings-status');
+  const systemDark = matchMedia('(prefers-color-scheme: dark)');
+  const defaults = {engine:'google', private_engine:'google', palette:'graphite', compact_tabs:false,
+    reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true};
+  let appliedSettings = defaults;
+  let settingsShowing = false;
+  let savingSettings = false;
+  function fillSettings(values) {
+    for (const [name, value] of Object.entries(values)) {
+      const control = settingsForm.elements.namedItem(name);
+      if (typeof value === 'boolean') control.checked = value;
+      else control.value = value;
+    }
+  }
+  function readSettings() {
+    return Object.fromEntries(Object.keys(defaults).map(name => {
+      const control = settingsForm.elements.namedItem(name);
+      return [name, control.type === 'checkbox' ? control.checked : control.value];
+    }));
+  }
+  function applyAppearance() {
+    const root = document.documentElement;
+    const {palette, compact_tabs, reduced_motion, opaque_toolbar} = appliedSettings;
+    root.dataset.palette = palette === 'system' ? (systemDark.matches ? 'graphite' : 'paper') : palette;
+    root.toggleAttribute('data-compact', compact_tabs);
+    root.toggleAttribute('data-quiet', reduced_motion);
+    root.toggleAttribute('data-opaque', opaque_toolbar);
+  }
+  window.renderSettings = (values, privateMode, outcome) => {
+    appliedSettings = values;
+    applyAppearance();
+    window.restoreSearchEngine(privateMode ? values.private_engine : values.engine);
+    if (outcome === null) return;
+    savingSettings = false;
+    if (outcome !== 'failed') fillSettings(values);
+    settingsEdited();
+    if (settingsShowing) (settingsSave.disabled ? settingsClose : settingsSave).focus();
+    settingsStatus.textContent = {
+      saved:'Настройки сохранены',
+      conflict:'Настройки изменились в другом окне. Загружены актуальные значения.',
+      failed:'Не удалось сохранить настройки. Попробуйте ещё раз.',
+    }[outcome];
+  };
+  systemDark.addEventListener?.('change', applyAppearance);
+  function filterSettings() {
+    const query = settingsFilter.value.trim().toLocaleLowerCase();
+    let visible = false;
+    for (const group of settingsForm.querySelectorAll('fieldset')) {
+      group.hidden = true;
+      for (const row of group.querySelectorAll('.setting-row')) {
+        row.hidden = !`${group.querySelector('legend').textContent} ${row.textContent}`.toLocaleLowerCase().includes(query);
+        if (!row.hidden) group.hidden = false;
+      }
+      if (!group.hidden) visible = true;
+    }
+    document.getElementById('settings-empty').hidden = visible;
+  }
+  settingsOpen.onclick = () => {
+    if (savingSettings) return;
+    settingsShowing = true;
+    toolbar.inert = true;
+    settingsDialog.hidden = false;
+    settingsFilter.value = '';
+    settingsStatus.textContent = '';
+    settingsSave.disabled = true;
+    fillSettings(appliedSettings);
+    filterSettings();
+    send({type:'composer', visible:true});
+    settingsFilter.focus();
+  };
+  function closeSettings() {
+    settingsShowing = false;
+    toolbar.inert = false;
+    settingsDialog.hidden = true;
+    send({type:'composer', visible:false});
+    settingsOpen.focus();
+  }
+  settingsClose.onclick = closeSettings;
+  settingsFilter.addEventListener('input', filterSettings);
+  function settingsEdited() {
+    const draft = readSettings();
+    settingsSave.disabled = savingSettings || Object.keys(defaults).every(name => draft[name] === appliedSettings[name]);
+    settingsStatus.textContent = settingsSave.disabled ? '' : 'Есть несохранённые изменения';
+  }
+  settingsForm.addEventListener('change', settingsEdited);
+  document.getElementById('settings-reset').onclick = () => {
+    if (savingSettings) return;
+    fillSettings(defaults);
+    settingsEdited();
+  };
+  settingsForm.onsubmit = event => {
+    event.preventDefault();
+    if (savingSettings || settingsSave.disabled) return;
+    savingSettings = true;
+    settingsSave.disabled = true;
+    send({type:'save-settings', settings:readSettings()});
+  };
   function handleShortcut(e) {
     if (e.isComposing || e.defaultPrevented) return;
+    if (settingsShowing) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSettings();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const controls = [...settingsDialog.querySelectorAll('button, input, select')]
+          .filter(control => control.offsetWidth && !control.disabled);
+        const index = controls.indexOf(document.activeElement);
+        controls[(index < 0 ? (e.shiftKey ? controls.length - 1 : 0) :
+          (index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length)].focus();
+      }
+      return;
+    }
     if (downloadShowing) {
       if (e.key === 'Escape') {
         e.preventDefault();

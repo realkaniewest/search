@@ -139,6 +139,10 @@ enum Command {
     SetSearchEngine {
         engine: SearchEngine,
     },
+    #[serde(rename = "save-settings")]
+    SaveSettings {
+        settings: Settings,
+    },
     #[serde(rename = "cancel-address")]
     CancelAddress,
     Back,
@@ -167,6 +171,78 @@ impl SearchEngine {
         let mut url = Url::parse(endpoint).ok()?;
         url.query_pairs_mut().append_pair(parameter, query);
         Some(url)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum Palette {
+    #[default]
+    Graphite,
+    Midnight,
+    Paper,
+    System,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+struct Settings {
+    engine: SearchEngine,
+    private_engine: SearchEngine,
+    palette: Palette,
+    compact_tabs: bool,
+    reduced_motion: bool,
+    opaque_toolbar: bool,
+    restore_tabs: bool,
+    record_history: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            engine: SearchEngine::Google,
+            private_engine: SearchEngine::Google,
+            palette: Palette::Graphite,
+            compact_tabs: false,
+            reduced_motion: false,
+            opaque_toolbar: false,
+            restore_tabs: true,
+            record_history: true,
+        }
+    }
+}
+
+fn load_settings(path: &Path, legacy_engine: &Path) -> Settings {
+    read_profile_data(path, 4096)
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| Settings {
+            engine: load_search_engine(legacy_engine),
+            ..Settings::default()
+        })
+}
+
+fn update_settings(
+    path: &Path,
+    legacy_engine: &Path,
+    update: impl FnOnce(Settings) -> io::Result<Settings>,
+) -> io::Result<Settings> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    fs::create_dir_all(parent)?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path.with_extension("lock"))?;
+    lock.lock()?;
+    let updated = update(load_settings(path, legacy_engine))?;
+    save_preference(path, &updated)?;
+    Ok(updated)
+}
+
+fn show_settings(chrome: &WebView, settings: Settings, private: bool, saved: Option<&str>) {
+    if let Ok(json) = serde_json::to_string(&(settings, private, saved)) {
+        let _ = chrome.evaluate_script(&format!("window.renderSettings(...{json})"));
     }
 }
 
@@ -199,7 +275,15 @@ fn save_preference(path: &Path, value: &impl Serialize) -> io::Result<()> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     fs::create_dir_all(parent)?;
     let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
-    let temp = parent.join(format!(".{}-{}.tmp", name.to_string_lossy(), process::id()));
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temp = parent.join(format!(
+        ".{}-{}-{stamp}.tmp",
+        name.to_string_lossy(),
+        process::id()
+    ));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -853,15 +937,21 @@ fn main() {
     let developer = mode == Mode::DeveloperPreview;
     let private = mode == Mode::PrivatePreview || developer;
     let preview = mode == Mode::HttpsPreview || private;
-    let engine_path = if preview && !private {
-        preference_path()
-    } else {
-        None
-    };
-    let session_path = engine_path
+    let legacy_engine_path = preview.then(preference_path).flatten();
+    let settings_path = legacy_engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("settings.json"));
+    let mut settings = settings_path
+        .as_deref()
+        .zip(legacy_engine_path.as_deref())
+        .map_or_else(Settings::default, |(path, legacy)| {
+            load_settings(path, legacy)
+        });
+    let profile_path = legacy_engine_path.as_ref().filter(|_| !private);
+    let session_path = profile_path
         .as_ref()
         .map(|path| path.with_file_name("session.json"));
-    let history_path = engine_path
+    let history_path = profile_path
         .as_ref()
         .map(|path| path.with_file_name("history.json"));
     let mut history = history_path
@@ -869,7 +959,7 @@ fn main() {
         .and_then(|path| read_profile_data(path, MAX_HISTORY_BYTES))
         .and_then(|bytes| History::from_json(&bytes))
         .unwrap_or_default();
-    let bookmarks_path = engine_path
+    let bookmarks_path = profile_path
         .as_ref()
         .map(|path| path.with_file_name("bookmarks.json"));
     let mut bookmarks = bookmarks_path
@@ -1044,7 +1134,11 @@ fn main() {
     };
 
     #[cfg(target_os = "macos")]
-    if let Some(session) = session_path.as_deref().and_then(load_session) {
+    if let Some(session) = session_path
+        .as_deref()
+        .filter(|_| settings.restore_tabs)
+        .and_then(load_session)
+    {
         let mut restored = Vec::with_capacity(session.tabs.len());
         let shared = shared_start
             .as_ref()
@@ -1172,11 +1266,8 @@ fn main() {
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
             }
             Event::UserEvent(AppEvent::ChromeReady) => {
-                if let Some(path) = &engine_path {
-                    let engine = load_search_engine(path);
-                    if let Ok(json) = serde_json::to_string(&engine) {
-                        let _ = chrome.evaluate_script(&format!("window.restoreSearchEngine({json})"));
-                    }
+                if preview {
+                    show_settings(&chrome, settings, private, None);
                 }
                 if preview && !private && let Ok(json) = serde_json::to_string(bookmarks.entries()) {
                     let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
@@ -1248,7 +1339,7 @@ fn main() {
                             tab.title = page.label().to_owned();
                         }
                     }
-                    if let Some(path) = &history_path
+                    if settings.record_history && let Some(path) = &history_path
                         && let Some((_, visited)) = preview_url(&url)
                     {
                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
@@ -1611,10 +1702,42 @@ fn main() {
                             let _ = chrome.evaluate_script(&format!("window.renderHistory({json})"));
                         }
                     }
-                    Command::SetSearchEngine { engine } => {
-                        if preview && !private && engine_path.as_ref().is_none_or(|path| save_preference(path, &engine).is_err()) {
-                            notice = Some("Не удалось сохранить поисковик. Выбор действует до перезапуска.");
+                    Command::SetSearchEngine { engine } if preview && !private => {
+                        let saved = settings_path.as_deref().zip(legacy_engine_path.as_deref())
+                            .and_then(|(path, legacy)| update_settings(path, legacy, |current| {
+                                Ok(Settings { engine, ..current })
+                            }).ok());
+                        if let Some(updated) = saved {
+                            settings = updated;
+                        } else {
+                            notice = Some("Не удалось сохранить поисковик.");
                         }
+                        show_settings(&chrome, settings, false, None);
+                    }
+                    Command::SaveSettings { settings: updated } if preview && !private => {
+                        let result = settings_path.as_deref().zip(legacy_engine_path.as_deref())
+                            .ok_or(io::ErrorKind::NotFound.into())
+                            .and_then(|(path, legacy)| update_settings(path, legacy, |current| {
+                                if current == settings {
+                                    Ok(updated)
+                                } else {
+                                    Err(io::ErrorKind::AlreadyExists.into())
+                                }
+                            }));
+                        let outcome = match result {
+                            Ok(updated) => {
+                                settings = updated;
+                                "saved"
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                                if let Some((path, legacy)) = settings_path.as_deref().zip(legacy_engine_path.as_deref()) {
+                                    settings = load_settings(path, legacy);
+                                }
+                                "conflict"
+                            }
+                            Err(_) => "failed",
+                        };
+                        show_settings(&chrome, settings, false, Some(outcome));
                     }
                     Command::CancelAddress => {}
                     Command::Back => {
@@ -1723,6 +1846,9 @@ fn main() {
                                 .map_or_else(|| Page::Start.url().to_owned(), |(_, url)| url.into())
                         }).collect(),
                     };
+                    let session = if settings.restore_tabs { session } else {
+                        SavedSession { active: 0, tabs: vec![Page::Start.url().to_owned()] }
+                    };
                     if let Err(error) = save_preference(path, &session) {
                         eprintln!("Search could not save its session: {error}");
                     }
@@ -1787,6 +1913,40 @@ mod tests {
         assert_eq!(load_search_engine(&path), SearchEngine::Yandex);
         fs::write(&path, br#""unknown""#).unwrap();
         assert_eq!(load_search_engine(&path), SearchEngine::Google);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settings_migrate_the_search_engine_and_round_trip() {
+        let root = env::temp_dir().join(format!("search-settings-test-{}", process::id()));
+        fs::create_dir(&root).unwrap();
+        let legacy = root.join("search-engine.json");
+        let path = root.join("settings.json");
+        save_preference(&legacy, &SearchEngine::Yandex).unwrap();
+        assert_eq!(load_settings(&path, &legacy).engine, SearchEngine::Yandex);
+        let settings = Settings {
+            engine: SearchEngine::Bing,
+            private_engine: SearchEngine::DuckDuckGo,
+            palette: Palette::Paper,
+            compact_tabs: true,
+            reduced_motion: true,
+            opaque_toolbar: true,
+            restore_tabs: false,
+            record_history: false,
+        };
+        fs::write(
+            root.join(format!(".settings.json-{}.tmp", process::id())),
+            b"old",
+        )
+        .unwrap();
+        update_settings(&path, &legacy, |_| Ok(settings)).unwrap();
+        assert_eq!(load_settings(&path, &legacy), settings);
+        let rejected =
+            update_settings(&path, &legacy, |_| Err(io::ErrorKind::AlreadyExists.into()));
+        assert_eq!(rejected.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(load_settings(&path, &legacy), settings);
+        fs::write(&path, vec![b' '; 4097]).unwrap();
+        assert_eq!(load_settings(&path, &legacy).engine, SearchEngine::Yandex);
         fs::remove_dir_all(root).unwrap();
     }
 
