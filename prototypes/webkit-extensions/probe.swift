@@ -5,6 +5,10 @@
 import AppKit
 import WebKit
 
+enum ProbeError: Error {
+    case controllerIsolation, contextStillLoaded
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 Task { @MainActor in
@@ -31,10 +35,10 @@ Task { @MainActor in
         try controller.load(context)
         guard context.isLoaded, normal.configuration.webExtensionController === controller,
               isolated.configuration.webExtensionController == nil else {
-            print("Extension context or isolation failed"); exit(1)
+            throw ProbeError.controllerIsolation
         }
         try controller.unload(context)
-        guard !context.isLoaded else { print("Extension context remains loaded"); exit(1) }
+        guard !context.isLoaded else { throw ProbeError.contextStillLoaded }
         status = 0
         print("PASS: WebKit loaded and unloaded a local MV3 extension in an isolated test controller")
     } catch {
