@@ -13,7 +13,25 @@ HOST = "127.0.0.1"
 PORT = 43127
 TITLE = "Search security fixture ready"
 
-def fixture_page(file_url):
+MEDIA_FRAME = b"""<!doctype html><script>
+(async () => {
+    let outcome = 'unavailable';
+    if (navigator.mediaDevices?.getUserMedia) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+            stream.getTracks().forEach(track => track.stop());
+            outcome = 'granted';
+        } catch (error) {
+            outcome = error.name === 'NotAllowedError' || error.name === 'SecurityError'
+                ? 'denied' : error.name;
+        }
+    }
+    parent.postMessage({mediaFrame: outcome}, location.origin);
+})();
+</script>"""
+
+
+def fixture_page(file_url, child_frame=False):
     return f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</title></head>
 <body><h1>Search security fixture</h1><script>
 (async () => {{
@@ -27,6 +45,25 @@ def fixture_page(file_url):
   try {{ result.popup = !!window.open('https://blocked.invalid/', '_blank'); }} catch (_) {{}}
   const link = document.createElement('a'); link.href = '/download'; link.download = 'blocked.txt';
   document.body.append(link); link.click();
+  if ({json.dumps(child_frame)}) {{
+    result.frameMicrophone = await new Promise(resolve => {{
+      const frame = document.createElement('iframe');
+      function finish(outcome) {{
+        window.removeEventListener('message', receive);
+        clearTimeout(timeout);
+        frame.remove();
+        resolve(outcome);
+      }}
+      function receive(event) {{
+        if (event.origin === location.origin && event.source === frame.contentWindow &&
+            typeof event.data?.mediaFrame === 'string') finish(event.data.mediaFrame);
+      }}
+      window.addEventListener('message', receive);
+      const timeout = setTimeout(() => finish('timeout'), 3500);
+      frame.src = '/media-frame';
+      document.body.append(frame);
+    }});
+  }}
   if (navigator.mediaDevices?.getUserMedia) {{
     async function checkMedia(constraints) {{
       return Promise.race([
@@ -76,6 +113,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             data, kind = type(self).page, "text/html; charset=utf-8"
+        elif self.path == "/media-frame":
+            data, kind = MEDIA_FRAME, "text/html; charset=utf-8"
         elif self.path == "/download":
             type(self).downloads += 1
             data, kind = b"blocked download", "application/octet-stream"
@@ -119,16 +158,20 @@ def main():
     with tempfile.TemporaryDirectory(prefix="search-navigation-smoke-") as directory:
         canary = Path(directory) / "canary.html"
         canary.write_text("<title>Search file navigation canary</title>", encoding="utf-8")
-        Handler.page = fixture_page(canary.as_uri())
-        return run_fixture(command + ["--security-smoke"], require_media_origin)
+        return run_fixture(command + ["--security-smoke"], canary.as_uri(), require_media_origin)
 
 
-def run_fixture(command, require_media_origin=False):
+def run_fixture(command, file_url, require_media_origin=False):
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         for attempt in (1, 2):
+            # WebKit can reuse an earlier denial within a view. A fresh process
+            # keeps the first request attributable to the intended frame.
+            child_frame = require_media_origin and attempt == 2
+            expected_frame = "child" if child_frame else "main"
+            Handler.page = fixture_page(file_url, child_frame)
             try:
                 run = subprocess.run(command, capture_output=True, text=True, timeout=65, check=False)
             except subprocess.TimeoutExpired as error:
@@ -145,10 +188,10 @@ def run_fixture(command, require_media_origin=False):
                 print("FAIL: Search did not confirm boundary checks", file=sys.stderr)
                 return 1
             if require_media_origin and (
-                "SECURITY: media_origin_matches_fixture=true" not in run.stdout
+                f"SECURITY: media_origin_matches_fixture=true frame={expected_frame}" not in run.stdout
                 or "SECURITY: media_origin_matches_fixture=false" in run.stdout
             ):
-                print("FAIL: WebKit did not report the expected main-frame media origin", file=sys.stderr)
+                print(f"FAIL: WebKit did not report the expected {expected_frame}-frame media origin", file=sys.stderr)
                 return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
@@ -161,6 +204,9 @@ def run_fixture(command, require_media_origin=False):
                     if result.get(check) is not True:
                         print(f"FAIL: {check} unverified: {result!r}", file=sys.stderr)
                         return 1
+                if child_frame and result.get("frameMicrophone") != "denied":
+                    print(f"FAIL: unexpected child-frame media result: {result.get('frameMicrophone')}", file=sys.stderr)
+                    return 1
                 permission_results = {
                     name: result.get(name) for name in ("camera", "microphone", "geolocation")
                 }

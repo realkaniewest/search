@@ -988,10 +988,16 @@ fn create_content(
             let verified_fixture = unsafe {
                 origin.protocol().to_string() == "http"
                     && origin.host().to_string() == "127.0.0.1"
-                    && origin.port() == 43127
-                    && frame.isMainFrame()
+                    && origin.port() == LOCAL_ORIGIN_PORT as isize
             };
-            println!("SECURITY: media_origin_matches_fixture={verified_fixture}");
+            let frame_kind = if unsafe { frame.isMainFrame() } {
+                "main"
+            } else {
+                "child"
+            };
+            println!(
+                "SECURITY: media_origin_matches_fixture={verified_fixture} frame={frame_kind}"
+            );
         })
     } else {
         builder
