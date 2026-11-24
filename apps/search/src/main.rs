@@ -981,6 +981,22 @@ fn create_content(
         builder.with_url(initial_url)
     };
     #[cfg(target_os = "macos")]
+    let builder = if security_fixture {
+        use wry::WebViewBuilderExtMacos;
+        builder.with_media_capture_observer(|origin, frame, _| {
+            // WebKit supplies these objects only for the duration of this callback.
+            let verified_fixture = unsafe {
+                origin.protocol().to_string() == "http"
+                    && origin.host().to_string() == "127.0.0.1"
+                    && origin.port() == 43127
+                    && frame.isMainFrame()
+            };
+            println!("SECURITY: media_origin_matches_fixture={verified_fixture}");
+        })
+    } else {
+        builder
+    };
+    #[cfg(target_os = "macos")]
     let builder = if persistent {
         use wry::WebViewBuilderExtDarwin;
         builder.with_data_store_identifier(macos_site_data::PROFILE_ID)

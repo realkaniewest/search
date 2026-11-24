@@ -1588,6 +1588,8 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   limit_navigations_to_app_bound_domains: bool,
   #[cfg(target_os = "macos")]
   webview_configuration: Option<Retained<objc2_web_kit::WKWebViewConfiguration>>,
+  #[cfg(target_os = "macos")]
+  media_capture_observer: Option<Box<MediaCaptureObserver>>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1605,6 +1607,8 @@ impl Default for PlatformSpecificWebViewAttributes {
       limit_navigations_to_app_bound_domains: false,
       #[cfg(target_os = "macos")]
       webview_configuration: None,
+      #[cfg(target_os = "macos")]
+      media_capture_observer: None,
     }
   }
 }
@@ -1660,7 +1664,25 @@ impl WebViewBuilderExtDarwin for WebViewBuilder<'_> {
 }
 
 #[cfg(target_os = "macos")]
+type MediaCaptureObserver = dyn Fn(
+  &objc2_web_kit::WKSecurityOrigin,
+  &objc2_web_kit::WKFrameInfo,
+  objc2_web_kit::WKMediaCaptureType,
+);
+
+#[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
+  /// Observe the native origin and frame of a media capture request before the permission handler.
+  /// The observer cannot change the permission decision.
+  fn with_media_capture_observer(
+    self,
+    observer: impl Fn(
+        &objc2_web_kit::WKSecurityOrigin,
+        &objc2_web_kit::WKFrameInfo,
+        objc2_web_kit::WKMediaCaptureType,
+      ) + 'static,
+  ) -> Self;
+
   /// Set the webview configuration that must be used to create the new webview.
   fn with_webview_configuration(
     self,
@@ -1670,6 +1692,18 @@ pub trait WebViewBuilderExtMacos {
 
 #[cfg(target_os = "macos")]
 impl WebViewBuilderExtMacos for WebViewBuilder<'_> {
+  fn with_media_capture_observer(
+    mut self,
+    observer: impl Fn(
+        &objc2_web_kit::WKSecurityOrigin,
+        &objc2_web_kit::WKFrameInfo,
+        objc2_web_kit::WKMediaCaptureType,
+      ) + 'static,
+  ) -> Self {
+    self.platform_specific.media_capture_observer = Some(Box::new(observer));
+    self
+  }
+
   fn with_webview_configuration(
     mut self,
     configuration: Retained<objc2_web_kit::WKWebViewConfiguration>,

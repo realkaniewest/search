@@ -653,6 +653,8 @@ impl InnerWebView {
         mtm,
         attributes.new_window_req_handler,
         attributes.permission_handler,
+        #[cfg(target_os = "macos")]
+        pl_attrs.media_capture_observer,
       );
       let proto_ui_delegate = ProtocolObject::from_ref(&*ui_delegate);
       webview.setUIDelegate(Some(proto_ui_delegate));

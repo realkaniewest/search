@@ -109,17 +109,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: run_search_security_smoke.py <binary> [wrapper args]", file=sys.stderr)
+    command = sys.argv[1:]
+    require_media_origin = command[:1] == ["--require-media-origin"]
+    if require_media_origin:
+        command = command[1:]
+    if not command:
+        print("Usage: run_search_security_smoke.py [--require-media-origin] <binary> [wrapper args]", file=sys.stderr)
         return 2
     with tempfile.TemporaryDirectory(prefix="search-navigation-smoke-") as directory:
         canary = Path(directory) / "canary.html"
         canary.write_text("<title>Search file navigation canary</title>", encoding="utf-8")
         Handler.page = fixture_page(canary.as_uri())
-        return run_fixture(sys.argv[1:] + ["--security-smoke"])
+        return run_fixture(command + ["--security-smoke"], require_media_origin)
 
 
-def run_fixture(command):
+def run_fixture(command, require_media_origin=False):
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -139,6 +143,12 @@ def run_fixture(command):
             if run.returncode != 0 or "PASS: Search security boundary checks" not in run.stdout:
                 print(f"Fixture result: {results!r}", file=sys.stderr)
                 print("FAIL: Search did not confirm boundary checks", file=sys.stderr)
+                return 1
+            if require_media_origin and (
+                "SECURITY: media_origin_matches_fixture=true" not in run.stdout
+                or "SECURITY: media_origin_matches_fixture=false" in run.stdout
+            ):
+                print("FAIL: WebKit did not report the expected main-frame media origin", file=sys.stderr)
                 return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
