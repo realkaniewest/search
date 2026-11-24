@@ -238,6 +238,11 @@
   .settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .settings-actions button[type="submit"] { background: var(--settings-accent); color: var(--settings-ink); font-weight: 650; }
   .settings-actions button:disabled { opacity: .55; cursor: default; }
+  #site-data-list { max-height: 230px; overflow: auto; margin: 8px 0; }
+  #site-data-list .setting-row span { overflow-wrap: anywhere; }
+  #site-data-list button, #site-data-open, #site-data-confirm button { color: inherit; background: var(--settings-bg); border: 1px solid var(--settings-line); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  #site-data-confirm { padding: 12px 0; }
+  #site-data-confirm p { overflow-wrap: anywhere; }
   #settings-status { color: var(--settings-muted); }
   :root[data-palette="midnight"] .bar { background: linear-gradient(110deg,#253958ee,#101a30ee); }
   :root[data-palette="paper"] .bar { background: #d9d5ca; }
@@ -335,6 +340,12 @@
       <fieldset><legend>Запуск и история</legend>
         <label class="setting-row"><span>Восстанавливать вкладки<small>Если выключено, следующий запуск начнётся с новой вкладки.</small></span><input type="checkbox" name="restore_tabs"></label>
         <label class="setting-row"><span>Записывать историю<small>Управляет записью новых посещений. Старые записи можно удалить в истории.</small></span><input type="checkbox" name="record_history"></label>
+      </fieldset>
+      <fieldset id="site-data-group" data-unavailable="true" hidden><legend>Данные сайтов</legend>
+        <div class="setting-row"><span>Файлы cookie, кэш и хранилище сайтов<small>Данные обычного окна сгруппированы по названиям, которые возвращает WebKit.</small></span><button id="site-data-open" type="button">Показать</button></div>
+        <div id="site-data-list" hidden></div>
+        <div id="site-data-confirm" hidden><p id="site-data-warning"></p><button id="site-data-delete" type="button">Удалить данные</button> <button id="site-data-cancel" type="button">Отмена</button></div>
+        <p id="site-data-status" role="status" hidden></p>
       </fieldset>
       <div class="settings-actions"><button id="settings-save" type="submit" disabled>Применить</button><button id="settings-reset" type="button">По умолчанию</button><span id="settings-status" role="status"></span></div>
     </form>
@@ -720,6 +731,68 @@
     }[outcome];
   };
   systemDark.addEventListener?.('change', applyAppearance);
+  const siteDataOpen = document.getElementById('site-data-open');
+  const siteDataList = document.getElementById('site-data-list');
+  const siteDataStatus = document.getElementById('site-data-status');
+  const siteDataConfirm = document.getElementById('site-data-confirm');
+  const siteDataDelete = document.getElementById('site-data-delete');
+  let siteToRemove = null;
+  let siteDataBusy = false;
+  function cancelSiteRemoval() {
+    siteToRemove = null;
+    siteDataConfirm.hidden = true;
+  }
+  document.getElementById('site-data-cancel').onclick = () => {
+    cancelSiteRemoval();
+    siteDataOpen.focus();
+  };
+  function requestSiteData(command) {
+    siteDataBusy = true;
+    siteDataOpen.disabled = true;
+    siteDataStatus.hidden = false;
+    siteDataStatus.textContent = command.type === 'site-data-list' ? 'Загрузка списка…' : 'Удаление данных…';
+    send(command);
+  }
+  siteDataOpen.onclick = () => {
+    cancelSiteRemoval();
+    requestSiteData({type:'site-data-list'});
+  };
+  siteDataDelete.onclick = () => {
+    if (siteDataBusy || siteToRemove === null) return;
+    requestSiteData({type:'site-data-remove', name:siteToRemove});
+    cancelSiteRemoval();
+  };
+  window.renderSiteData = (names, removed) => {
+    siteDataBusy = false;
+    siteDataOpen.disabled = false;
+    if (!settingsShowing) return;
+    siteDataList.replaceChildren();
+    siteDataList.hidden = false;
+    for (const name of names) {
+      const row = document.createElement('div');
+      row.className = 'setting-row';
+      const text = document.createElement('span');
+      text.textContent = name;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Удалить';
+      remove.setAttribute('aria-label', `Удалить данные ${name}`);
+      remove.onclick = () => {
+        if (siteDataBusy) return;
+        siteToRemove = name;
+        document.getElementById('site-data-warning').textContent =
+          `Удалить все записи WebKit с именем «${name}»? Это может затронуть несколько связанных сайтов. Возможно, придётся войти заново.`;
+        siteDataConfirm.hidden = false;
+        siteDataDelete.focus();
+      };
+      row.append(text, remove);
+      siteDataList.append(row);
+    }
+    if (removed !== null && document.activeElement === document.body) siteDataOpen.focus();
+    siteDataStatus.textContent = removed === true ? 'WebKit завершил удаление данных.'
+      : removed === false ? 'Эта запись уже отсутствует.'
+      : names.length === 0 ? 'Данных сайтов пока нет.' : '';
+  };
   function filterSettings() {
     const query = settingsFilter.value.trim().toLocaleLowerCase();
     let visible = false;
@@ -740,6 +813,9 @@
     toolbar.inert = true;
     settingsDialog.hidden = false;
     settingsFilter.value = '';
+    siteDataList.hidden = true;
+    siteDataStatus.hidden = true;
+    cancelSiteRemoval();
     settingsStatus.textContent = '';
     settingsSave.disabled = true;
     fillSettings(appliedSettings);
@@ -779,7 +855,12 @@
     if (settingsShowing) {
       if (e.key === 'Escape') {
         e.preventDefault();
-        closeSettings();
+        if (!siteDataConfirm.hidden) {
+          cancelSiteRemoval();
+          siteDataOpen.focus();
+        } else {
+          closeSettings();
+        }
       } else if (e.key === 'Tab') {
         e.preventDefault();
         const controls = [...settingsDialog.querySelectorAll('button, input, select')]

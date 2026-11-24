@@ -67,7 +67,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page', 'toolbar', 'settings', 'settings-open', 'settings-close', 'settings-filter', 'settings-empty', 'settings-form', 'settings-save', 'settings-reset', 'settings-status'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page', 'toolbar', 'settings', 'settings-open', 'settings-close', 'settings-filter', 'settings-empty', 'settings-form', 'settings-save', 'settings-reset', 'settings-status', 'site-data-open', 'site-data-list', 'site-data-status', 'site-data-confirm', 'site-data-delete', 'site-data-cancel', 'site-data-warning'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   documentElement: new Element(),
@@ -113,6 +113,20 @@ elements.get('settings-form').dispatch('submit');
 messages.pop();
 window.renderSettings({...savedSettings, record_history:false}, false, 'saved');
 assert.equal(elements.get('settings-save').disabled, true);
+elements.get('site-data-open').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'site-data-list'});
+window.renderSiteData(['example.test'], null);
+elements.get('site-data-list').children[0].children[1].dispatch('click');
+assert.equal(elements.get('site-data-confirm').hidden, false);
+assert.equal(messages.length, 0);
+elements.get('site-data-cancel').dispatch('click');
+assert.equal(elements.get('site-data-confirm').hidden, true);
+assert.equal(messages.length, 0);
+elements.get('site-data-list').children[0].children[1].dispatch('click');
+elements.get('site-data-delete').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'site-data-remove', name:'example.test'});
+window.renderSiteData([], true);
+assert.equal(elements.get('site-data-list').children.length, 0);
 elements.get('settings-close').dispatch('click');
 assert.deepEqual(messages.pop(), {type:'composer', visible:false});
 assert.equal(elements.get('toolbar').inert, false);

@@ -8,6 +8,8 @@ mod history;
 mod macos_download;
 #[cfg(target_os = "macos")]
 mod macos_shortcuts;
+#[cfg(target_os = "macos")]
+mod macos_site_data;
 
 use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
 use history::{History, MAX_HISTORY_BYTES};
@@ -142,6 +144,14 @@ enum Command {
     #[serde(rename = "save-settings")]
     SaveSettings {
         settings: Settings,
+    },
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "site-data-list")]
+    SiteDataList,
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "site-data-remove")]
+    SiteDataRemove {
+        name: String,
     },
     #[serde(rename = "cancel-address")]
     CancelAddress,
@@ -420,6 +430,11 @@ enum AppEvent {
     ContentTitle {
         id: u64,
         title: String,
+    },
+    #[cfg(target_os = "macos")]
+    SiteDataResult {
+        names: Vec<String>,
+        removed: Option<bool>,
     },
     NavigationTick,
     SecurityProgress(u64),
@@ -968,10 +983,7 @@ fn create_content(
     #[cfg(target_os = "macos")]
     let builder = if persistent {
         use wry::WebViewBuilderExtDarwin;
-        builder.with_data_store_identifier([
-            0x51, 0x86, 0xf1, 0xe4, 0xfc, 0xa0, 0x47, 0xb3, 0xa7, 0x98, 0xc4, 0xe9, 0x1c, 0xe9,
-            0x13, 0x55,
-        ])
+        builder.with_data_store_identifier(macos_site_data::PROFILE_ID)
     } else {
         builder
     };
@@ -1177,6 +1189,8 @@ fn main() {
     let mut active = 0usize;
     let mut composer_visible = false;
     #[cfg(target_os = "macos")]
+    let mut site_data_pending = false;
+    #[cfg(target_os = "macos")]
     let mut choosing_download_destination = false;
     #[cfg(target_os = "macos")]
     let mut download_job: Option<(
@@ -1340,6 +1354,9 @@ fn main() {
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if preview {
                     show_settings(&chrome, settings, private, None);
+                    if security_counts.persistent_site_data {
+                        let _ = chrome.evaluate_script("document.getElementById('site-data-group').dataset.unavailable = ''");
+                    }
                     if !supports_page_zoom {
                         let _ = chrome.evaluate_script("document.getElementById('page-zoom-group').dataset.unavailable = 'true'");
                     }
@@ -1479,6 +1496,13 @@ fn main() {
                 }
                 eprintln!("FAIL: Search first window did not load before the test deadline");
                 *control_flow = ControlFlow::ExitWithCode(1);
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::SiteDataResult { names, removed }) => {
+                site_data_pending = false;
+                if let Ok(json) = serde_json::to_string(&(names, removed)) {
+                    let _ = chrome.evaluate_script(&format!("window.renderSiteData(...{json})"));
+                }
             }
             Event::UserEvent(AppEvent::Command(Command::Composer { visible })) => {
                 if preview && visible != composer_visible {
@@ -1822,6 +1846,21 @@ fn main() {
                             }
                         }
                         show_settings(&chrome, settings, false, Some(outcome));
+                    }
+                    #[cfg(target_os = "macos")]
+                    Command::SiteDataList | Command::SiteDataRemove { .. }
+                        if security_counts.persistent_site_data && composer_visible && !site_data_pending =>
+                    {
+                        let remove = match command {
+                            Command::SiteDataRemove { name } if !name.is_empty() => Some(name),
+                            Command::SiteDataRemove { .. } => return,
+                            _ => None,
+                        };
+                        site_data_pending = true;
+                        let result_proxy = content_proxy.clone();
+                        macos_site_data::manage(remove, move |names, removed| {
+                            let _ = result_proxy.send_event(AppEvent::SiteDataResult { names, removed });
+                        });
                     }
                     Command::CancelAddress => {}
                     Command::Back => {
