@@ -27,6 +27,10 @@ class Element {
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = [...children]; }
   setAttribute(key, value) { this.attributes.set(key, String(value)); }
+  toggleAttribute(key, enabled) {
+    if (enabled) this.attributes.set(key, '');
+    else this.attributes.delete(key);
+  }
   getAttribute(key) { return this.attributes.get(key); }
   addEventListener(key, callback) { this.listeners.set(key, callback); }
   focus() { document.activeElement = this; }
@@ -63,9 +67,10 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page', 'toolbar', 'settings', 'settings-open', 'settings-close', 'settings-filter', 'settings-empty', 'settings-form', 'settings-save', 'settings-reset', 'settings-status'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
+  documentElement: new Element(),
   getElementById: id => elements.get(id),
   createElement: tag => new Element(tag),
   addEventListener(type, callback) { this[type] = callback; },
@@ -80,7 +85,37 @@ class ResizeObserver {
   constructor(callback) { resizeTabs = callback; }
   observe() {}
 }
-runInNewContext(script, { document, window, Number, JSON, TextEncoder, ResizeObserver });
+const controls = new Map([
+  ['engine', {value:'google'}], ['private_engine', {value:'google'}], ['palette', {value:'graphite'}],
+  ...['compact_tabs', 'reduced_motion', 'opaque_toolbar', 'restore_tabs', 'record_history'].map(name => [name, {type:'checkbox'}]),
+]);
+elements.get('settings-form').elements = { namedItem: name => controls.get(name) };
+elements.get('settings-form').querySelectorAll = () => [];
+runInNewContext(script, { document, window, Number, JSON, TextEncoder, ResizeObserver,
+  matchMedia: () => ({matches: false}) });
+const savedSettings = {engine:'google', private_engine:'duckduckgo', palette:'system', compact_tabs:true,
+  reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true};
+window.renderSettings(savedSettings, true, null);
+assert.equal(document.documentElement.dataset.palette, 'paper');
+assert.equal(document.documentElement.getAttribute('data-compact'), '');
+assert.equal(elements.get('engine-mark').dataset.engine, 'duckduckgo');
+window.renderSettings(savedSettings, false, null);
+elements.get('settings-open').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'composer', visible:true});
+assert.equal(elements.get('toolbar').inert, true);
+controls.get('record_history').checked = false;
+elements.get('settings-form').dispatch('change');
+elements.get('settings-form').dispatch('submit');
+assert.deepEqual(messages.pop(), {type:'save-settings', settings:{...savedSettings, record_history:false}});
+window.renderSettings(savedSettings, false, 'failed');
+assert.equal(elements.get('settings-save').disabled, false);
+elements.get('settings-form').dispatch('submit');
+messages.pop();
+window.renderSettings({...savedSettings, record_history:false}, false, 'saved');
+assert.equal(elements.get('settings-save').disabled, true);
+elements.get('settings-close').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'composer', visible:false});
+assert.equal(elements.get('toolbar').inert, false);
 
 const tabs = elements.get('tabs');
 window.renderSearch({active: 0, tabs: [
