@@ -67,18 +67,20 @@ Task { @MainActor in
             exit(1)
         }
     }
-    guard CommandLine.arguments.count == 6,
+    guard CommandLine.arguments.count == 7,
           let profileID = UUID(uuidString: CommandLine.arguments[3]),
           let allowed = URL(string: CommandLine.arguments[1]), allowed.host == "localhost",
           let denied = URL(string: CommandLine.arguments[2]), denied.host == "127.0.0.1",
-          allowed.scheme == "http", denied.scheme == "http" else {
+          let alternate = URL(string: CommandLine.arguments[4]), alternate.host == allowed.host,
+          allowed.port != alternate.port,
+          allowed.scheme == "http", denied.scheme == "http", alternate.scheme == "http" else {
         print("Run this probe with run.py")
         exit(2)
     }
-    let phase = CommandLine.arguments[4]
+    let phase = CommandLine.arguments[5]
     guard ["initial", "restart", "revoked"].contains(phase) else { exit(2) }
     let restart = phase != "initial"
-    let state = URL(fileURLWithPath: CommandLine.arguments[5])
+    let state = URL(fileURLWithPath: CommandLine.arguments[6])
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
     var status: Int32 = 1
     do {
@@ -127,21 +129,22 @@ Task { @MainActor in
             try await check("revocation after second restart", url: allowed, in: normal, marked: false)
         } else {
             try await check("allowed site", url: allowed, in: normal, marked: true)
+            try await check("same host other port", url: alternate, in: normal, marked: true)
             try await check("denied site", url: denied, in: normal, marked: false)
             let navigation = Navigation()
             try await navigation.load(allowed.appendingPathComponent("frames"), in: normal)
             let frameResult = try await normal.callAsyncJavaScript("""
                 for (let attempt = 0; attempt < 30; attempt++) {
-                    const {allowed, denied} = window.frameReports;
-                    if (typeof allowed === 'boolean' && typeof denied === 'boolean') {
-                        return allowed === true && denied === false;
+                    const {allowed, denied, alternatePort} = window.frameReports;
+                    if (typeof allowed === 'boolean' && typeof denied === 'boolean' && typeof alternatePort === 'boolean') {
+                        return allowed === true && denied === false && alternatePort === true;
                     }
                     await new Promise(resolve => setTimeout(resolve, 100));
                 }
                 return false;
                 """, arguments: [:], in: nil, contentWorld: .page)
             guard frameResult as? Bool == true else {
-                throw ProbeError.unexpectedMarker("same-origin and cross-origin frames")
+                throw ProbeError.unexpectedMarker("same-origin, different host, and alternate-port frames")
             }
             try await check("isolated Search chrome", url: allowed.appendingPathComponent("chrome"), in: isolated, marked: false)
             try await check("private view", url: allowed, in: privateView, marked: false)

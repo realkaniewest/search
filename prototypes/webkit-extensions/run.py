@@ -12,6 +12,8 @@ CHROME = Path(__file__).resolve().parents[2] / "apps/search/src/chrome.html"
 
 
 class Fixture(BaseHTTPRequestHandler):
+    alternate_port: int
+
     def do_GET(self):
         port = self.server.server_port
         if self.path == "/chrome":
@@ -28,7 +30,8 @@ addEventListener('message', event => {{
 }});
 </script>
 <iframe id="allowed" src="http://localhost:{port}/report"></iframe>
-<iframe id="denied" src="http://127.0.0.1:{port}/report"></iframe>""".encode()
+<iframe id="denied" src="http://127.0.0.1:{port}/report"></iframe>
+<iframe id="alternatePort" src="http://localhost:{self.alternate_port}/report"></iframe>""".encode()
         elif self.path == "/report":
             body = b"""<!doctype html><title>Search frame report</title>
 <script>
@@ -54,19 +57,27 @@ if __name__ == "__main__":
     with (
         TemporaryDirectory(prefix="search-extension-probe-") as temp,
         ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as server,
+        ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as alternate,
     ):
-        thread = Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        Fixture.alternate_port = alternate.server_port
+        servers = (server, alternate)
+        threads = [Thread(target=httpd.serve_forever, daemon=True) for httpd in servers]
+        for thread in threads:
+            thread.start()
         port = server.server_port
         try:
             state = str(Path(temp) / "permissions.json")
-            arguments = [*probe, f"http://localhost:{port}/", f"http://127.0.0.1:{port}/", profile]
+            arguments = [
+                *probe, f"http://localhost:{port}/", f"http://127.0.0.1:{port}/", profile,
+                f"http://localhost:{alternate.server_port}/",
+            ]
             for phase in ("initial", "restart", "revoked"):
                 result = run([*arguments, phase, state], timeout=30, check=False)
                 if result.returncode:
                     break
         finally:
-            server.shutdown()
-            thread.join()
+            for httpd, thread in zip(servers, threads):
+                httpd.shutdown()
+                thread.join()
             cleanup = run([*probe, "--cleanup", profile], timeout=20, check=False)
     raise SystemExit(result.returncode or cleanup.returncode)
