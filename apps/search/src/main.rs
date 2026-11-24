@@ -50,6 +50,7 @@ use wry::WebViewBuilderExtWindows;
 
 const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
+const MEDIA_FRAME_ORIGIN_PORT: u16 = 43128;
 const MAX_TABS: usize = 12;
 const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const HAS_HTTPS_PREVIEW: bool = cfg!(all(target_os = "macos", debug_assertions))
@@ -947,6 +948,10 @@ fn create_content(
                 target == "about:blank" || preview_url(&target).is_some()
             } else {
                 permits_content_navigation(&target, &policy)
+                    || (security_fixture
+                        && policy.load(Ordering::SeqCst)
+                        && target
+                            == format!("http://127.0.0.1:{MEDIA_FRAME_ORIGIN_PORT}/media-frame"))
             };
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
                 eprintln!("content navigation allowed={allowed}");
@@ -985,19 +990,24 @@ fn create_content(
         use wry::WebViewBuilderExtMacos;
         builder.with_media_capture_observer(|origin, frame, _| {
             // WebKit supplies these objects only for the duration of this callback.
-            let verified_fixture = unsafe {
-                origin.protocol().to_string() == "http"
-                    && origin.host().to_string() == "127.0.0.1"
-                    && origin.port() == LOCAL_ORIGIN_PORT as isize
+            let source = |origin: &objc2_web_kit::WKSecurityOrigin| {
+                let (local_host, port) = unsafe {
+                    (
+                        origin.protocol().to_string() == "http"
+                            && origin.host().to_string() == "127.0.0.1",
+                        origin.port(),
+                    )
+                };
+                match (local_host, port) {
+                    (true, port) if port == LOCAL_ORIGIN_PORT as isize => "primary",
+                    (true, port) if port == MEDIA_FRAME_ORIGIN_PORT as isize => "alternate",
+                    _ => "unexpected",
+                }
             };
-            let frame_kind = if unsafe { frame.isMainFrame() } {
-                "main"
-            } else {
-                "child"
-            };
-            println!(
-                "SECURITY: media_origin_matches_fixture={verified_fixture} frame={frame_kind}"
-            );
+            let callback_source = source(origin);
+            let frame_source = source(&*unsafe { frame.securityOrigin() });
+            let frame_kind = if unsafe { frame.isMainFrame() } { "main" } else { "child" };
+            println!("SECURITY: media_origin={callback_source} frame={frame_kind} frame_origin={frame_source}");
         })
     } else {
         builder

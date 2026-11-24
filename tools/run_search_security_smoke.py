@@ -11,6 +11,7 @@ from pathlib import Path
 
 HOST = "127.0.0.1"
 PORT = 43127
+MEDIA_FRAME_PORT = 43128
 TITLE = "Search security fixture ready"
 
 MEDIA_FRAME = b"""<!doctype html><script>
@@ -26,12 +27,13 @@ MEDIA_FRAME = b"""<!doctype html><script>
                 ? 'denied' : error.name;
         }
     }
-    parent.postMessage({mediaFrame: outcome}, location.origin);
+    parent.postMessage({mediaFrame: outcome}, "http://127.0.0.1:43127");
 })();
 </script>"""
 
 
-def fixture_page(file_url, child_frame=False):
+def fixture_page(file_url, child_url=None):
+    child_origin = child_url.rsplit("/", 1)[0] if child_url else None
     return f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</title></head>
 <body><h1>Search security fixture</h1><script>
 (async () => {{
@@ -45,7 +47,7 @@ def fixture_page(file_url, child_frame=False):
   try {{ result.popup = !!window.open('https://blocked.invalid/', '_blank'); }} catch (_) {{}}
   const link = document.createElement('a'); link.href = '/download'; link.download = 'blocked.txt';
   document.body.append(link); link.click();
-  if ({json.dumps(child_frame)}) {{
+  if ({json.dumps(child_url is not None)}) {{
     result.frameMicrophone = await new Promise(resolve => {{
       const frame = document.createElement('iframe');
       function finish(outcome) {{
@@ -55,12 +57,13 @@ def fixture_page(file_url, child_frame=False):
         resolve(outcome);
       }}
       function receive(event) {{
-        if (event.origin === location.origin && event.source === frame.contentWindow &&
+        if (event.origin === {json.dumps(child_origin)} && event.source === frame.contentWindow &&
             typeof event.data?.mediaFrame === 'string') finish(event.data.mediaFrame);
       }}
       window.addEventListener('message', receive);
       const timeout = setTimeout(() => finish('timeout'), 3500);
-      frame.src = '/media-frame';
+      frame.allow = 'microphone *';
+      frame.src = {json.dumps(child_url)};
       document.body.append(frame);
     }});
   }}
@@ -162,16 +165,32 @@ def main():
 
 
 def run_fixture(command, file_url, require_media_origin=False):
+    if require_media_origin:
+        with http.server.ThreadingHTTPServer((HOST, MEDIA_FRAME_PORT), Handler) as alternate:
+            thread = threading.Thread(target=alternate.serve_forever, daemon=True)
+            thread.start()
+            try:
+                return run_fixtures(command, file_url, require_media_origin)
+            finally:
+                alternate.shutdown()
+                thread.join()
+    return run_fixtures(command, file_url, require_media_origin)
+
+
+def run_fixtures(command, file_url, require_media_origin):
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for attempt in (1, 2):
+        for attempt in (range(3) if require_media_origin else range(2)):
             # WebKit can reuse an earlier denial within a view. A fresh process
             # keeps the first request attributable to the intended frame.
-            child_frame = require_media_origin and attempt == 2
+            child_frame = require_media_origin and attempt > 0
+            alternate = require_media_origin and attempt == 2
             expected_frame = "child" if child_frame else "main"
-            Handler.page = fixture_page(file_url, child_frame)
+            expected_origin = "alternate" if alternate else "primary"
+            child_url = f"http://{HOST}:{MEDIA_FRAME_PORT if alternate else PORT}/media-frame"
+            Handler.page = fixture_page(file_url, child_url if child_frame else None)
             try:
                 run = subprocess.run(command, capture_output=True, text=True, timeout=65, check=False)
             except subprocess.TimeoutExpired as error:
@@ -182,14 +201,15 @@ def run_fixture(command, file_url, require_media_origin=False):
                 return 1
             print(run.stdout, end="")
             print(run.stderr, end="", file=sys.stderr)
-            results = Handler.results[(attempt - 1) * 2:]
+            results = Handler.results[attempt * 2:]
             if run.returncode != 0 or "PASS: Search security boundary checks" not in run.stdout:
                 print(f"Fixture result: {results!r}", file=sys.stderr)
                 print("FAIL: Search did not confirm boundary checks", file=sys.stderr)
                 return 1
             if require_media_origin and (
-                f"SECURITY: media_origin_matches_fixture=true frame={expected_frame}" not in run.stdout
-                or "SECURITY: media_origin_matches_fixture=false" in run.stdout
+                f"SECURITY: media_origin=primary frame={expected_frame} frame_origin={expected_origin}" not in run.stdout
+                or "SECURITY: media_origin=unexpected" in run.stdout
+                or "frame_origin=unexpected" in run.stdout
             ):
                 print(f"FAIL: WebKit did not report the expected {expected_frame}-frame media origin", file=sys.stderr)
                 return 1
