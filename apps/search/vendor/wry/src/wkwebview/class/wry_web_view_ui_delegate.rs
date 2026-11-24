@@ -142,10 +142,6 @@ define_class!(
       capture_type: WKMediaCaptureType,
       decision_handler: &Block<dyn Fn(WKPermissionDecision)>,
     ) {
-      #[cfg(target_os = "macos")]
-      if let Some(observer) = &self.ivars().media_capture_observer {
-        observer(_origin, _frame, capture_type);
-      }
       // Call user's permission handler if set
       let decision = if let Some(handler) = &self.ivars().permission_handler {
         let translate_response = |res: PermissionResponse| match res {
@@ -176,6 +172,10 @@ define_class!(
       };
 
       (*decision_handler).call((decision,));
+      #[cfg(target_os = "macos")]
+      if let Some(observer) = &self.ivars().media_capture_observer {
+        observer(_origin, _frame, capture_type);
+      }
     }
 
     #[cfg(target_os = "macos")]

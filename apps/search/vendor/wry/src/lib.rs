@@ -1672,7 +1672,7 @@ type MediaCaptureObserver = dyn Fn(
 
 #[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
-  /// Observe the native origin and frame of a media capture request before the permission handler.
+  /// Observe the native origin and frame of a media capture request after the permission decision.
   /// The observer cannot change the permission decision.
   fn with_media_capture_observer(
     self,
