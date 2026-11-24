@@ -1862,6 +1862,10 @@ fn main() {
                             let _ = result_proxy.send_event(AppEvent::SiteDataResult { names, removed });
                         });
                     }
+                    #[cfg(target_os = "macos")]
+                    Command::SiteDataList | Command::SiteDataRemove { .. } => {
+                        let _ = chrome.evaluate_script("window.siteDataUnavailable()");
+                    }
                     Command::CancelAddress => {}
                     Command::Back => {
                         let tab = &mut tabs[active];

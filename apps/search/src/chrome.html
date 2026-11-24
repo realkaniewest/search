@@ -746,12 +746,27 @@
     cancelSiteRemoval();
     siteDataOpen.focus();
   };
+  window.siteDataUnavailable = () => {
+    siteDataBusy = false;
+    siteDataOpen.disabled = false;
+    if (!settingsShowing) return;
+    siteDataStatus.hidden = false;
+    siteDataStatus.textContent = 'Не удалось выполнить запрос к данным сайтов.';
+  };
   function requestSiteData(command) {
+    if (new TextEncoder().encode(JSON.stringify(command)).length > 2048) {
+      window.siteDataUnavailable();
+      return;
+    }
     siteDataBusy = true;
     siteDataOpen.disabled = true;
     siteDataStatus.hidden = false;
     siteDataStatus.textContent = command.type === 'site-data-list' ? 'Загрузка списка…' : 'Удаление данных…';
-    send(command);
+    try {
+      send(command);
+    } catch {
+      window.siteDataUnavailable();
+    }
   }
   siteDataOpen.onclick = () => {
     cancelSiteRemoval();
