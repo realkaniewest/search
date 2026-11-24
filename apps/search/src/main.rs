@@ -2,16 +2,28 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+mod bookmarks;
+mod history;
+#[cfg(target_os = "macos")]
+mod macos_download;
+#[cfg(target_os = "macos")]
+mod macos_shortcuts;
+
+use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
+use history::{History, MAX_HISTORY_BYTES};
 use serde::{Deserialize, Serialize};
 use std::rc::Rc;
 use std::{
-    env, process,
+    env, fs,
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    process,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tao::{
     dpi::{LogicalPosition, LogicalSize},
@@ -19,7 +31,7 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder},
     window::{Window, WindowBuilder},
 };
-use url::Url;
+use url::{Host, Url};
 use wry::{
     NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse, Rect, WebView,
     WebViewBuilder,
@@ -37,17 +49,26 @@ use wry::WebViewBuilderExtWindows;
 const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
 const MAX_TABS: usize = 12;
+const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
+const HAS_HTTPS_PREVIEW: bool = cfg!(all(target_os = "macos", debug_assertions))
+    && option_env!("SEARCH_BUILD_HTTPS_PREVIEW").is_some();
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Mode {
     Normal,
     Smoke,
     SecuritySmoke,
+    HttpsPreview,
+    PrivatePreview,
+    DeveloperPreview,
 }
 
 #[derive(Default)]
 struct SecurityCounts {
     fixture_mode: bool,
+    https_preview: bool,
+    persistent_site_data: bool,
+    developer_preview: bool,
     blocked_navigation: AtomicUsize,
     blocked_popup: AtomicUsize,
     blocked_download: AtomicUsize,
@@ -69,6 +90,9 @@ impl SecurityCounts {
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 enum Command {
     New,
+    Composer {
+        visible: bool,
+    },
     Reopen,
     Select {
         id: u64,
@@ -78,6 +102,42 @@ enum Command {
     },
     Open {
         value: String,
+        #[serde(default)]
+        engine: SearchEngine,
+    },
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "download-address")]
+    DownloadAddress {
+        value: String,
+    },
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "cancel-download")]
+    CancelDownload,
+    #[serde(rename = "developer-window")]
+    DeveloperWindow,
+    #[serde(rename = "inspect-page")]
+    InspectPage,
+    #[serde(rename = "private-window")]
+    PrivateWindow,
+    #[serde(rename = "bookmarks-list")]
+    BookmarksList,
+    #[serde(rename = "bookmark-toggle")]
+    BookmarkToggle,
+    #[serde(rename = "bookmark-remove")]
+    BookmarkRemove {
+        value: String,
+    },
+    #[serde(rename = "history-list")]
+    HistoryList,
+    #[serde(rename = "history-clear")]
+    HistoryClear,
+    #[serde(rename = "history-remove")]
+    HistoryRemove {
+        value: String,
+    },
+    #[serde(rename = "set-search-engine")]
+    SetSearchEngine {
+        engine: SearchEngine,
     },
     #[serde(rename = "cancel-address")]
     CancelAddress,
@@ -86,15 +146,134 @@ enum Command {
     Reload,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum SearchEngine {
+    #[default]
+    Google,
+    Yandex,
+    DuckDuckGo,
+    Bing,
+}
+
+impl SearchEngine {
+    fn search(self, query: &str) -> Option<Url> {
+        let (endpoint, parameter) = match self {
+            Self::Google => ("https://www.google.com/search", "q"),
+            Self::Yandex => ("https://ya.ru/search/", "text"),
+            Self::DuckDuckGo => ("https://duckduckgo.com/", "q"),
+            Self::Bing => ("https://www.bing.com/search", "q"),
+        };
+        let mut url = Url::parse(endpoint).ok()?;
+        url.query_pairs_mut().append_pair(parameter, query);
+        Some(url)
+    }
+}
+
+fn preference_path() -> Option<PathBuf> {
+    let home = PathBuf::from(env::var_os("HOME")?);
+    home.is_absolute()
+        .then(|| home.join("Library/Application Support/Search Preview/search-engine.json"))
+}
+
+fn read_profile_data(path: &Path, limit: usize) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    (bytes.len() <= limit).then_some(bytes)
+}
+
+fn load_search_engine(path: &Path) -> SearchEngine {
+    let mut value = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take(64).read_to_end(&mut value))
+        .ok()
+        .and_then(|_| serde_json::from_slice(&value).ok())
+        .unwrap_or_default()
+}
+
+fn save_preference(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    fs::create_dir_all(parent)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let temp = parent.join(format!(".{}-{}.tmp", name.to_string_lossy(), process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temp)?;
+    let result = (|| {
+        serde_json::to_writer(&mut file, value)?;
+        file.flush()?;
+        fs::rename(&temp, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temp);
+    }
+    result
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedSession {
+    active: usize,
+    tabs: Vec<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn load_session(path: &Path) -> Option<SavedSession> {
+    const MAX_SESSION_BYTES: u64 = 256 * 1024;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .ok()?
+        .take(MAX_SESSION_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_SESSION_BYTES {
+        return None;
+    }
+    let mut session: SavedSession = serde_json::from_slice(&bytes).ok()?;
+    session.tabs.truncate(MAX_TABS);
+    if session.tabs.is_empty() {
+        return None;
+    }
+    session.active = session.active.min(session.tabs.len() - 1);
+    Some(session)
+}
+
 #[derive(Debug)]
 enum AppEvent {
+    #[cfg(target_os = "macos")]
+    NativeShortcut(macos_shortcuts::Shortcut),
+    #[cfg(target_os = "macos")]
+    DownloadDestination(Url, Option<PathBuf>),
+    #[cfg(target_os = "macos")]
+    DownloadFinished(macos_download::Outcome),
     ChromeReady,
-    StartLink { id: u64, url: String },
-    ContentStarted { id: u64, url: String },
-    ContentLoaded { id: u64, url: String },
-    ContentTitle { id: u64, title: String },
-    SecurityCheck,
-    SecurityProgress,
+    StartLink {
+        id: u64,
+        url: String,
+    },
+    ContentStarted {
+        id: u64,
+        url: String,
+    },
+    ContentLoaded {
+        id: u64,
+        url: String,
+    },
+    ContentTitle {
+        id: u64,
+        title: String,
+    },
+    NavigationTick,
+    SecurityProgress(u64),
+    SecurityTick,
     TimedOut,
     Command(Command),
 }
@@ -106,6 +285,7 @@ enum Page {
     Wikipedia,
     Excalidraw,
     LocalFixture,
+    Web,
 }
 
 impl Page {
@@ -116,6 +296,7 @@ impl Page {
             Self::Wikipedia => "Wikipedia",
             Self::Excalidraw => "Excalidraw",
             Self::LocalFixture => "Локальная страница",
+            Self::Web => "HTTPS",
         }
     }
 
@@ -126,6 +307,7 @@ impl Page {
             Self::Wikipedia => "https://www.wikipedia.org/",
             Self::Excalidraw => "https://excalidraw.com/",
             Self::LocalFixture => "http://127.0.0.1:43127/",
+            Self::Web => "about:blank",
         }
     }
 }
@@ -157,6 +339,127 @@ fn validated_url(raw: &str) -> Option<(Page, Url)> {
     Some((page, url))
 }
 
+fn preview_url(raw: &str) -> Option<(Page, Url)> {
+    let (scheme, rest) = raw.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if !scheme.eq_ignore_ascii_case("https")
+        || authority.is_empty()
+        || authority.contains('@')
+        || raw.contains('\\')
+        || raw.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return None;
+    }
+    let url = Url::parse(raw).ok()?;
+    let Host::Domain(host) = url.host()? else {
+        return None;
+    };
+    let host = host.trim_end_matches('.');
+    (url.port_or_known_default() == Some(443)
+        && host.contains('.')
+        && !host.ends_with(".localhost")
+        && !host.ends_with(".local"))
+    .then(|| {
+        (
+            validated_url(url.as_str()).map_or(Page::Web, |(page, _)| page),
+            url,
+        )
+    })
+}
+
+fn preview_destination(raw: &str, engine: SearchEngine) -> Option<(Page, String)> {
+    let input = raw.trim();
+    if input == Page::Start.url() {
+        return Some((Page::Start, Page::Start.url().to_owned()));
+    }
+    if let Some((page, url)) = preview_url(input) {
+        return Some((page, url.into()));
+    }
+    if input.is_empty() || input.contains("://") || input.chars().any(char::is_control) {
+        return None;
+    }
+    let single_token = !input.chars().any(char::is_whitespace);
+    let authority = input.split(['/', '?', '#']).next()?;
+    if single_token
+        && (authority.contains('.')
+            || authority.contains('@')
+            || input.contains(':')
+            || input.contains('\\')
+            || authority.eq_ignore_ascii_case("localhost"))
+    {
+        return preview_url(&format!("https://{input}")).map(|(page, url)| (page, url.into()));
+    }
+    let first_token = input.split_whitespace().next()?;
+    let looks_like_bare_url = first_token
+        .split_once(['/', '?', '#', ':'])
+        .is_some_and(|(host, _)| host.contains('.') || host.eq_ignore_ascii_case("localhost"));
+    if first_token.contains('@')
+        || looks_like_bare_url
+        || first_token.split_once(':').is_some_and(|(scheme, rest)| {
+            !rest.is_empty()
+                && matches!(
+                    scheme.to_ascii_lowercase().as_str(),
+                    "http" | "https" | "file" | "mailto" | "javascript" | "data"
+                )
+        })
+    {
+        return None;
+    }
+    let url = engine.search(input)?;
+    preview_url(url.as_str()).map(|(page, url)| (page, url.into()))
+}
+
+fn developer_url(raw: &str) -> Option<Url> {
+    let (scheme, rest) = raw.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+        || authority.is_empty()
+        || authority.contains('@')
+        || raw
+            .chars()
+            .any(|ch| ch == '\\' || ch.is_control() || ch.is_whitespace())
+    {
+        return None;
+    }
+    let mut url = Url::parse(raw).ok()?;
+    match url.host()? {
+        Host::Domain("localhost") => url.set_host(Some("127.0.0.1")).ok()?,
+        Host::Ipv4(ip) if ip.octets() == [127, 0, 0, 1] => {}
+        Host::Ipv6(ip) if ip.is_loopback() => {}
+        _ => return None,
+    }
+    Some(url)
+}
+
+fn developer_destination(raw: &str) -> Option<(Page, String)> {
+    let input = raw.trim();
+    if input == Page::Start.url() {
+        return Some((Page::Start, input.to_owned()));
+    }
+    let url = if input.contains("://") {
+        developer_url(input)
+    } else {
+        developer_url(&format!("http://{input}"))
+    }?;
+    Some((Page::Web, url.into()))
+}
+
+fn start_document(developer: bool) -> &'static str {
+    if developer {
+        include_str!("developer.html")
+    } else {
+        include_str!("start.html")
+    }
+}
+
+fn navigation_url(raw: &str, preview: bool) -> Option<(Page, Url)> {
+    if preview {
+        preview_url(raw)
+    } else {
+        validated_url(raw)
+    }
+}
+
 fn allowed_url(raw: &str) -> Option<Page> {
     validated_url(raw).map(|(page, _)| page)
 }
@@ -179,7 +482,7 @@ fn parse_command(raw: &str) -> Option<Command> {
         return None;
     }
     let command = serde_json::from_str::<Command>(raw).ok()?;
-    if matches!(&command, Command::Open { value } if value.len() > 1024) {
+    if matches!(&command, Command::Open { value, .. } if value.len() > 1024) {
         return None;
     }
     Some(command)
@@ -187,6 +490,14 @@ fn parse_command(raw: &str) -> Option<Command> {
 
 fn deny_permission(_: PermissionKind) -> PermissionResponse {
     PermissionResponse::Deny
+}
+
+fn full_window_bounds(window: &Window) -> Rect {
+    let size = window.inner_size().to_logical::<f64>(window.scale_factor());
+    Rect {
+        position: LogicalPosition::new(0.0, 0.0).into(),
+        size: size.into(),
+    }
 }
 
 fn bounds(window: &Window) -> (Rect, Rect) {
@@ -223,11 +534,58 @@ struct Tab {
     display_url: String,
     title: String,
     loading: bool,
+    load_watch: LoadWatch,
     has_start_entry: bool,
     pending_start_return: bool,
     start_forward_url: Option<String>,
     view: Rc<WebView>,
     local_navigation: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct LoadWatch {
+    deadline: Option<Instant>,
+    timed_out: bool,
+}
+
+impl LoadWatch {
+    fn start(&mut self, now: Instant) {
+        self.deadline = Some(now + PAGE_LOAD_TIMEOUT);
+        self.timed_out = false;
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn expire(&mut self, now: Instant) -> bool {
+        if self.deadline.is_some_and(|deadline| now >= deadline) {
+            self.deadline = None;
+            self.timed_out = true;
+            return true;
+        }
+        false
+    }
+}
+
+fn only_fragment_changed(before: &str, after: &str) -> bool {
+    let (Ok(mut before), Ok(mut after)) = (Url::parse(before), Url::parse(after)) else {
+        return false;
+    };
+    if before.fragment() == after.fragment() {
+        return false;
+    }
+    before.set_fragment(None);
+    after.set_fragment(None);
+    before == after
+}
+
+fn load_watch_for_page(page: Page) -> LoadWatch {
+    let mut watch = LoadWatch::default();
+    if !matches!(page, Page::Start) {
+        watch.start(Instant::now());
+    }
+    watch
 }
 
 impl Tab {
@@ -236,11 +594,22 @@ impl Tab {
     }
 }
 
-fn loaded_page(url: &str, pending_start_return: bool) -> Option<(Page, String)> {
+fn loaded_page(
+    url: &str,
+    pending_start_return: bool,
+    preview: bool,
+    developer: bool,
+) -> Option<(Page, String)> {
     if url == "about:blank" && pending_start_return {
         return Some((Page::Start, Page::Start.url().to_owned()));
     }
-    validated_url(url).map(|(page, url)| (page, url.into()))
+    if preview && url == "about:blank" {
+        return Some((Page::Web, url.to_owned()));
+    }
+    if developer {
+        return developer_url(url).map(|url| (Page::Web, url.into()));
+    }
+    navigation_url(url, preview).map(|(page, url)| (page, url.into()))
 }
 
 fn safe_title(raw: &str) -> Option<String> {
@@ -303,7 +672,10 @@ fn sync_chrome(
                 loading: tab.loading,
             })
             .collect(),
-        notice,
+        notice: notice
+            .or(tab.load_watch.timed_out.then_some(
+                "Страница пока не загрузилась. Проверь соединение или повтори переход.",
+            )),
         attempted_address,
     };
     if let Ok(json) = serde_json::to_string(&state) {
@@ -325,6 +697,21 @@ fn permits_content_navigation(target: &str, local_navigation: &AtomicBool) -> bo
     }
 }
 
+fn supports_separate_site_data_store() -> bool {
+    cfg!(target_os = "macos")
+        && process::Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+            .is_ok_and(|result| {
+                result.status.success()
+                    && String::from_utf8_lossy(&result.stdout)
+                        .split('.')
+                        .next()
+                        .and_then(|major| major.trim().parse::<u32>().ok())
+                        .is_some_and(|major| major >= 14)
+            })
+}
+
 fn create_content(
     window: &Window,
     #[cfg(target_os = "linux")] fixed: &gtk::Fixed,
@@ -340,13 +727,20 @@ fn create_content(
     let permission_counts = counts.clone();
     let download_counts = counts.clone();
     let popup_counts = counts.clone();
+    let persistent =
+        counts.persistent_site_data && !matches!(page, Page::Start | Page::LocalFixture);
+    let developer = counts.developer_preview;
+    let developer_origin = developer
+        .then(|| developer_url(initial_url))
+        .flatten()
+        .map(|url| url.origin());
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
-    let second_fixture =
-        navigation_counts.fixture_mode && id == 2 && matches!(page, Page::LocalFixture);
+    let security_fixture = navigation_counts.fixture_mode && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
-        .with_incognito(true)
+        .with_incognito(!persistent)
+        .with_devtools(developer)
         .with_permission_handler(move |kind| {
             permission_counts
                 .denied_permission
@@ -375,7 +769,19 @@ fn create_content(
                 }
                 return target == "about:blank";
             }
-            let allowed = permits_content_navigation(&target, &policy);
+            let allowed = if developer {
+                target == "about:blank"
+                    || developer_url(&target).is_some_and(|url| {
+                        developer_origin.as_ref() == Some(&url.origin())
+                            && Url::parse(&target)
+                                .ok()
+                                .is_some_and(|candidate| candidate.host() == url.host())
+                    })
+            } else if navigation_counts.https_preview {
+                target == "about:blank" || preview_url(&target).is_some()
+            } else {
+                permits_content_navigation(&target, &policy)
+            };
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
                 eprintln!("content navigation allowed={allowed}");
             }
@@ -383,10 +789,9 @@ fn create_content(
                 navigation_counts
                     .blocked_navigation
                     .fetch_add(1, Ordering::SeqCst);
-                // In the two-tab smoke run, the second fixture attempts this
-                // navigation after its report reaches the local server.
-                if second_fixture && target == "https://blocked.invalid/" {
-                    let _ = fixture_proxy.send_event(AppEvent::SecurityProgress);
+                // The fixture attempts this URL only after posting its report.
+                if security_fixture && target == "https://blocked.invalid/" {
+                    let _ = fixture_proxy.send_event(AppEvent::SecurityProgress(id));
                 }
             }
             allowed
@@ -405,9 +810,19 @@ fn create_content(
             let _ = proxy.send_event(AppEvent::ContentTitle { id, title });
         });
     let builder = if matches!(page, Page::Start) {
-        builder.with_html(include_str!("start.html"))
+        builder.with_html(start_document(developer))
     } else {
         builder.with_url(initial_url)
+    };
+    #[cfg(target_os = "macos")]
+    let builder = if persistent {
+        use wry::WebViewBuilderExtDarwin;
+        builder.with_data_store_identifier([
+            0x51, 0x86, 0xf1, 0xe4, 0xfc, 0xa0, 0x47, 0xb3, 0xa7, 0x98, 0xc4, 0xe9, 0x1c, 0xe9,
+            0x13, 0x55,
+        ])
+    } else {
+        builder
     };
     #[cfg(target_os = "windows")]
     let builder = builder
@@ -419,26 +834,55 @@ fn create_content(
     build_view(builder, window).map(|view| (view, local_navigation))
 }
 
-fn send_security_checkpoint(proxy: &tao::event_loop::EventLoopProxy<AppEvent>, round: u8) {
-    eprintln!("SECURITY: dispatch checkpoint {round}");
-    if proxy.send_event(AppEvent::SecurityCheck).is_err() {
-        eprintln!("SECURITY: event loop closed before checkpoint {round}");
-    }
-}
-
 fn main() {
     let mode = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
         [] => Mode::Normal,
         [flag] if flag == "--smoke" => Mode::Smoke,
         [flag] if flag == "--security-smoke" => Mode::SecuritySmoke,
+        [flag] if flag == "--https-preview" && HAS_HTTPS_PREVIEW => Mode::HttpsPreview,
+        [flag] if flag == "--developer-preview" && HAS_HTTPS_PREVIEW => Mode::DeveloperPreview,
+        [flag] if flag == "--private-preview" && HAS_HTTPS_PREVIEW => Mode::PrivatePreview,
         _ => {
             eprintln!("Usage: search-browser [--smoke|--security-smoke]");
             process::exit(2);
         }
     };
+    let developer = mode == Mode::DeveloperPreview;
+    let private = mode == Mode::PrivatePreview || developer;
+    let preview = mode == Mode::HttpsPreview || private;
+    let engine_path = if preview && !private {
+        preference_path()
+    } else {
+        None
+    };
+    let session_path = engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("session.json"));
+    let history_path = engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("history.json"));
+    let mut history = history_path
+        .as_deref()
+        .and_then(|path| read_profile_data(path, MAX_HISTORY_BYTES))
+        .and_then(|bytes| History::from_json(&bytes))
+        .unwrap_or_default();
+    let bookmarks_path = engine_path
+        .as_ref()
+        .map(|path| path.with_file_name("bookmarks.json"));
+    let mut bookmarks = bookmarks_path
+        .as_deref()
+        .and_then(|path| read_profile_data(path, MAX_BOOKMARK_BYTES))
+        .and_then(|bytes| Bookmarks::from_json(&bytes))
+        .unwrap_or_default();
     let event_loop = EventLoopBuilder::<AppEvent>::with_user_event().build();
     let window_builder = WindowBuilder::new()
-        .with_title("Search")
+        .with_title(if developer {
+            "Search · Разработка"
+        } else if private {
+            "Search · Временное окно"
+        } else {
+            "Search"
+        })
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
         .with_min_inner_size(LogicalSize::new(680.0, 420.0));
     #[cfg(target_os = "macos")]
@@ -464,30 +908,36 @@ fn main() {
     let (chrome_rect, content_rect) = bounds(&window);
     let proxy = event_loop.create_proxy();
     if mode == Mode::SecuritySmoke {
-        for (round, seconds) in [(1, 12), (2, 24)] {
-            let timer_proxy = proxy.clone();
-            thread::spawn(move || {
-                thread::sleep(Duration::from_secs(seconds));
-                send_security_checkpoint(&timer_proxy, round);
-            });
-        }
-    }
-    if mode == Mode::SecuritySmoke {
         let timer_proxy = proxy.clone();
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(34));
+            let deadline = Instant::now() + Duration::from_secs(50);
+            while Instant::now() < deadline {
+                thread::sleep(Duration::from_secs(1));
+                if timer_proxy.send_event(AppEvent::SecurityTick).is_err() {
+                    return;
+                }
+            }
             let _ = timer_proxy.send_event(AppEvent::TimedOut);
         });
     }
     let security_counts = Arc::new(SecurityCounts {
         fixture_mode: mode == Mode::SecuritySmoke,
+        https_preview: preview,
+        developer_preview: developer,
+        persistent_site_data: preview && !private && supports_separate_site_data_store(),
         ..SecurityCounts::default()
     });
     let ready_proxy = proxy.clone();
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
         .with_html(include_str!("chrome.html"))
-        .with_initialization_script(if cfg!(target_os = "macos") {
+        .with_initialization_script(if developer {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview', 'developer-preview'));"
+        } else if private {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview'));"
+        } else if preview {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview'));"
+        } else if cfg!(target_os = "macos") {
             "document.documentElement?.classList.add('mac-toolbar'); document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar'));"
         } else { "" })
         .with_incognito(true)
@@ -550,6 +1000,7 @@ fn main() {
         display_url: initial_page.url().to_owned(),
         title: initial_page.label().to_owned(),
         loading: false,
+        load_watch: LoadWatch::default(),
         has_start_entry: matches!(initial_page, Page::Start),
         pending_start_return: false,
         start_forward_url: None,
@@ -557,13 +1008,88 @@ fn main() {
         local_navigation,
     }];
     let mut active = 0usize;
+    let mut composer_visible = false;
+    #[cfg(target_os = "macos")]
+    let mut choosing_download_destination = false;
+    #[cfg(target_os = "macos")]
+    let mut download_job: Option<(
+        Arc<macos_download::DownloadControl>,
+        thread::JoinHandle<()>,
+    )> = None;
     let mut last_closed = None::<(Page, String)>;
     let mut next_id = 2u64;
     let mut chrome_ready = false;
     let mut content_ready = false;
+    let mut security_reports = [false; 2];
+    let mut second_fixture_requested = false;
     let mut notice = None;
     let mut attempted_address: Option<String> = None;
     let content_proxy = event_loop.create_proxy();
+    #[cfg(target_os = "macos")]
+    let shortcuts_enabled = Rc::new(std::cell::Cell::new(false));
+    #[cfg(target_os = "macos")]
+    let mut shortcut_monitor = if preview {
+        macos_shortcuts::Monitor::install(
+            &window,
+            event_loop.create_proxy(),
+            shortcuts_enabled.clone(),
+        )
+    } else {
+        None
+    };
+
+    #[cfg(target_os = "macos")]
+    if let Some(session) = session_path.as_deref().and_then(load_session) {
+        let mut restored = Vec::with_capacity(session.tabs.len());
+        let shared = shared_start
+            .as_ref()
+            .expect("preview has a shared start view");
+        let _ = shared.0.set_visible(false);
+        for address in &session.tabs {
+            let website = preview_url(address);
+            let destination = website.as_ref().and_then(|(page, url)| {
+                create_content(
+                    &window,
+                    next_id,
+                    content_proxy.clone(),
+                    security_counts.clone(),
+                    (*page, url.as_str(), None),
+                    content_rect,
+                )
+                .ok()
+                .map(|(view, policy)| (Rc::new(view), policy, *page, url.to_string()))
+            });
+            let (view, local_navigation, page, display_url) = destination.unwrap_or_else(|| {
+                (
+                    shared.0.clone(),
+                    shared.1.clone(),
+                    Page::Start,
+                    Page::Start.url().to_owned(),
+                )
+            });
+            let _ = view.set_visible(false);
+            restored.push(Tab {
+                id: next_id,
+                page,
+                display_url,
+                title: page.label().to_owned(),
+                loading: !matches!(page, Page::Start),
+                load_watch: load_watch_for_page(page),
+                has_start_entry: matches!(page, Page::Start),
+                pending_start_return: false,
+                start_forward_url: None,
+                view,
+                local_navigation,
+            });
+            next_id += 1;
+        }
+        active = session.active;
+        let _ = restored[active].view.set_visible(true);
+        tabs = restored;
+        if let Some(selection) = &start_selection {
+            selection.store(tabs[active].id, Ordering::Relaxed);
+        }
+    }
 
     if mode == Mode::Smoke {
         // Native WebView creation may block before the event loop can consume
@@ -575,13 +1101,25 @@ fn main() {
         });
     }
 
+    if preview {
+        let timer = event_loop.create_proxy();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(1));
+                if timer.send_event(AppEvent::NavigationTick).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
     event_loop.run(move |event, _, control_flow| {
         let _keep_window_alive = &window;
         *control_flow = ControlFlow::Wait;
         let command_from_start = match event {
             Event::UserEvent(AppEvent::StartLink { id, url }) => {
                 if id == tabs[active].id && shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view)) {
-                    Event::UserEvent(AppEvent::Command(Command::Open { value: url }))
+                    Event::UserEvent(AppEvent::Command(Command::Open { value: url, engine: SearchEngine::default() }))
                 } else {
                     return;
                 }
@@ -589,21 +1127,87 @@ fn main() {
             event => event,
         };
         match command_from_start {
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::NativeShortcut(shortcut)) => {
+                if chrome_ready && !composer_visible && let Ok(json) = serde_json::to_string(&shortcut) {
+                    if shortcut.focuses_address() { let _ = chrome.focus(); }
+                    let _ = chrome.evaluate_script(&format!("window.searchNativeShortcut({json})"));
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::DownloadDestination(url, destination))
+                if choosing_download_destination && download_job.is_none() =>
+            {
+                choosing_download_destination = false;
+                if let Some(destination) = destination {
+                    let cancel = Arc::new(macos_download::DownloadControl::default());
+                    let worker = Arc::clone(&cancel);
+                    let proxy = content_proxy.clone();
+                    let _ = chrome.evaluate_script("window.setDownloadActive(true)");
+                    notice = Some("Загрузка файла…");
+                    let worker = thread::spawn(move || {
+                        let outcome = macos_download::fetch(&url, &destination, &worker);
+                        let _ = proxy.send_event(AppEvent::DownloadFinished(outcome));
+                    });
+                    download_job = Some((cancel, worker));
+                    sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::DownloadFinished(outcome)) => {
+                if let Some((_, worker)) = download_job.take() { let _ = worker.join(); }
+                use macos_download::Outcome;
+                notice = Some(match outcome {
+                    Outcome::Saved => "Файл сохранён.",
+                    Outcome::Cancelled => "Загрузка отменена.",
+                    Outcome::DestinationExists => "Файл с таким именем уже есть. Выбери другое имя.",
+                    Outcome::Failed => "Не удалось скачать файл по этому адресу.",
+                });
+                let _ = chrome.evaluate_script("window.setDownloadActive(false)");
+                sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
+            }
             Event::UserEvent(AppEvent::ChromeReady) => {
+                if let Some(path) = &engine_path {
+                    let engine = load_search_engine(path);
+                    if let Ok(json) = serde_json::to_string(&engine) {
+                        let _ = chrome.evaluate_script(&format!("window.restoreSearchEngine({json})"));
+                    }
+                }
+                if preview && !private && let Ok(json) = serde_json::to_string(bookmarks.entries()) {
+                    let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
+                }
                 if mode == Mode::Smoke { println!("SMOKE: chrome loaded"); }
                 chrome_ready = true;
+                #[cfg(target_os = "macos")]
+                shortcuts_enabled.set(!composer_visible);
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
                 if mode == Mode::Smoke && content_ready {
                     println!("PASS: Search chrome and start content loaded");
                     *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
+            Event::UserEvent(AppEvent::NavigationTick) if preview => {
+                let now = Instant::now();
+                let mut changed = false;
+                for tab in &mut tabs {
+                    if tab.load_watch.expire(now) {
+                        tab.loading = false;
+                        changed = true;
+                    }
+                }
+                if chrome_ready && changed {
+                    sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
+                }
+            }
             Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
-                    && (allowed_url(&url).is_some() || url == "about:blank")
+                    && (url == "about:blank" || if developer { developer_url(&url).is_some() } else { navigation_url(&url, preview).is_some() })
                 {
                     tab.loading = true;
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return) {
+                    if preview && url != "about:blank" && tab.load_watch.deadline.is_none() {
+                        tab.load_watch.start(Instant::now());
+                    }
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.title = page.label().to_owned();
@@ -624,13 +1228,30 @@ fn main() {
                     content_ready = true;
                 }
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id) {
-                    tab.loading = false;
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return) {
+                    let finished_start = url == "about:blank" && tab.pending_start_return;
+                    if url != "about:blank" || finished_start || tab.load_watch.deadline.is_none() {
+                        tab.loading = false;
+                        if url != "about:blank" || finished_start {
+                            tab.load_watch.clear();
+                        }
+                    }
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.pending_start_return = false;
                         if matches!(page, Page::Start) {
                             tab.title = page.label().to_owned();
+                        }
+                    }
+                    if let Some(path) = &history_path
+                        && let Some((_, visited)) = preview_url(&url)
+                    {
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |elapsed| elapsed.as_secs());
+                        if history.record(&visited, &tab.title, now)
+                            && let Err(error) = save_preference(path, &history)
+                        {
+                            eprintln!("Search could not save history: {error}");
                         }
                     }
                     if chrome_ready {
@@ -653,36 +1274,51 @@ fn main() {
                     }
                 }
             }
-            Event::UserEvent(signal @ (AppEvent::SecurityCheck | AppEvent::SecurityProgress))
-                if mode == Mode::SecuritySmoke =>
-            {
-                let checkpoint = matches!(signal, AppEvent::SecurityCheck);
+            Event::UserEvent(AppEvent::SecurityProgress(id)) if mode == Mode::SecuritySmoke => {
+                if let 1..=2 = id {
+                    security_reports[id as usize - 1] = true;
+                }
+            }
+            Event::UserEvent(AppEvent::SecurityTick) if mode == Mode::SecuritySmoke => {
                 let (nav, popup, download, permission) = security_counts.snapshot();
-                let title_verified = tabs
-                    .first()
-                    .is_some_and(|tab| tab.title == "Search security fixture ready");
-                println!("SECURITY: fixture_loaded={content_ready} title_verified={title_verified} blocked_navigation={nav} blocked_popup={popup} blocked_download={download} denied_permission={permission}");
-                // WebKitGTK can deny window.open before Wry's popup callback.
-                // The fixture separately checks that no popup was returned.
-                if content_ready && chrome_ready && title_verified && nav > 0 && download > 0 {
-                    if checkpoint && tabs.len() == 1 && active == 0 {
-                        let _ = content_proxy.send_event(AppEvent::Command(Command::New));
-                    } else if !checkpoint
-                        && nav >= 2
-                        && download >= 2
-                        && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
-                    {
-                        println!("PASS: Search security boundary checks");
-                        *control_flow = ControlFlow::ExitWithCode(0);
-                    }
-                } else if checkpoint {
-                    eprintln!("FAIL: Search security boundary checks incomplete");
-                    *control_flow = ControlFlow::ExitWithCode(1);
+                let first_ready = content_ready && chrome_ready && tabs.first().is_some_and(
+                    |tab| tab.title == "Search security fixture ready"
+                );
+                // Wait for both the page report and the asynchronous WebView callbacks.
+                if first_ready && nav > 0 && download > 0 && security_reports[0]
+                    && !second_fixture_requested
+                {
+                    second_fixture_requested = true;
+                    let _ = content_proxy.send_event(AppEvent::Command(Command::New));
+                }
+                if first_ready && security_reports == [true; 2] && nav >= 2 && download >= 2
+                    && tabs.get(1).is_some_and(|tab| tab.title == tabs[0].title)
+                {
+                    println!("SECURITY: blocked_navigation={nav} blocked_popup={popup} blocked_download={download} denied_permission={permission}");
+                    println!("PASS: Search security boundary checks");
+                    *control_flow = ControlFlow::ExitWithCode(0);
                 }
             }
             Event::UserEvent(AppEvent::TimedOut) => {
+                if mode == Mode::SecuritySmoke {
+                    eprintln!("SECURITY: reports={security_reports:?} chrome_ready={chrome_ready} content_ready={content_ready} counts={:?}", security_counts.snapshot());
+                }
                 eprintln!("FAIL: Search first window did not load before the test deadline");
                 *control_flow = ControlFlow::ExitWithCode(1);
+            }
+            Event::UserEvent(AppEvent::Command(Command::Composer { visible })) => {
+                if preview && visible != composer_visible {
+                    let rect = if visible { full_window_bounds(&window) } else { bounds(&window).0 };
+                    if chrome.set_bounds(rect).is_ok() {
+                        composer_visible = visible;
+                        #[cfg(target_os = "macos")]
+                        shortcuts_enabled.set(chrome_ready && !visible);
+                        let _ = tabs[active].view.set_visible(!visible);
+                        if visible {
+                            let _ = chrome.focus();
+                        }
+                    }
+                }
             }
             Event::UserEvent(AppEvent::Command(command)) => {
                 notice = None;
@@ -743,6 +1379,7 @@ fn main() {
                                 display_url: url.to_owned(),
                                 title: page.label().to_owned(),
                                 loading: restoring && !matches!(page, Page::Start),
+                                load_watch: if restoring && preview { load_watch_for_page(page) } else { LoadWatch::default() },
                                 has_start_entry: matches!(page, Page::Start),
                                 pending_start_return: false,
                                 start_forward_url: None,
@@ -794,12 +1431,22 @@ fn main() {
                             }
                         }
                     }
-                    Command::Open { value } => {
-                        if let Some((page, url)) = page_from_input(&value) {
+                    Command::Open { value, engine } => {
+                        let destination = if developer {
+                            developer_destination(&value)
+                        } else if preview {
+                            preview_destination(&value, engine)
+                        } else {
+                            page_from_input(&value)
+                        };
+                        if let Some((page, url)) = destination {
                             let is_shared = shared_start.as_ref().is_some_and(|(view, _)| Rc::ptr_eq(view, &tabs[active].view));
+                            let changes_local_origin = developer && !matches!(page, Page::Start)
+                                && developer_url(&tabs[active].display_url).map(|url| url.origin())
+                                    != developer_url(&url).map(|url| url.origin());
                             let result = if is_shared && matches!(page, Page::Start) {
                                 Ok(())
-                            } else if is_shared || matches!(page, Page::LocalFixture) {
+                            } else if is_shared || changes_local_origin || matches!(page, Page::LocalFixture) {
                                 let (_, rect) = bounds(&window);
                                 #[cfg(target_os = "linux")]
                                 let local_view = create_content(
@@ -824,16 +1471,29 @@ fn main() {
                                 let tab = &tabs[active];
                                 tab.local_navigation.store(false, Ordering::SeqCst);
                                 if matches!(page, Page::Start) {
-                                    tab.view.load_html(include_str!("start.html"))
+                                    tab.view.load_html(start_document(developer))
                                 } else {
                                     tab.view.load_url(&url)
                                 }
                             };
                             if result.is_ok() {
-                                tabs[active].page = page;
-                                tabs[active].display_url = url;
-                                tabs[active].title = page.label().to_owned();
-                                tabs[active].loading = !matches!(page, Page::Start);
+                                let waits_for_commit = preview && !matches!(page, Page::Start);
+                                if waits_for_commit && !only_fragment_changed(&tabs[active].display_url, &url) {
+                                    tabs[active].loading = true;
+                                    tabs[active].load_watch.start(Instant::now());
+                                } else {
+                                    tabs[active].load_watch.clear();
+                                }
+                                if waits_for_commit && (is_shared || changes_local_origin) {
+                                    tabs[active].page = Page::Web;
+                                    tabs[active].display_url = "about:blank".to_owned();
+                                    tabs[active].title = Page::Web.label().to_owned();
+                                } else if !waits_for_commit {
+                                    tabs[active].page = page;
+                                    tabs[active].display_url = url;
+                                    tabs[active].title = page.label().to_owned();
+                                    tabs[active].loading = !matches!(page, Page::Start);
+                                }
                                 if matches!(page, Page::Start) {
                                     tabs[active].has_start_entry = true;
                                 }
@@ -844,8 +1504,111 @@ fn main() {
                                 attempted_address = Some(value);
                             }
                         } else {
-                            notice = Some("Пока доступны Rust, Wikipedia, Excalidraw и local.");
+                            notice = Some(if developer {
+                                "Введи адрес локального сервера, например localhost:3000."
+                            } else if preview {
+                                "Этот адрес недоступен. Введи публичный HTTPS-адрес или поисковый запрос."
+                            } else {
+                                "Пока доступны Rust, Wikipedia, Excalidraw и local."
+                            });
                             attempted_address = Some(value);
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    Command::DownloadAddress { value } if preview && !private => {
+                        if download_job.is_none() && !choosing_download_destination {
+                            if let Some((_, url)) = preview_url(value.trim()) {
+                                use wry::WebViewExtMacOS;
+                                choosing_download_destination = true;
+                                let proxy = content_proxy.clone();
+                                let request_url = url.clone();
+                                macos_download::choose_destination(&chrome.ns_window(), &url, move |destination| {
+                                    let _ = proxy.send_event(AppEvent::DownloadDestination(request_url.clone(), destination));
+                                });
+                            } else {
+                                notice = Some("Введи прямой публичный HTTPS-адрес файла.");
+                            }
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    Command::CancelDownload if preview => {
+                        if let Some((cancel, _)) = &download_job {
+                            notice = Some(if cancel.cancel() {
+                                "Отменяю загрузку…"
+                            } else {
+                                "Файл уже сохраняется."
+                            });
+                        }
+                    }
+                    Command::DeveloperWindow if preview && !private => {
+                        let opened = env::current_exe().and_then(|binary| {
+                            process::Command::new(binary).arg("--developer-preview").spawn()
+                        });
+                        if opened.is_err() {
+                            notice = Some("Не удалось открыть окно разработки.");
+                        }
+                    }
+                    #[cfg(all(target_os = "macos", debug_assertions))]
+                    Command::InspectPage if developer && developer_url(&tabs[active].display_url).is_some() => {
+                        tabs[active].view.open_devtools();
+                    }
+                    Command::PrivateWindow if preview && !private => {
+                        let opened = env::current_exe().and_then(|binary| {
+                            process::Command::new(binary).arg("--private-preview").spawn()
+                        });
+                        if opened.is_err() {
+                            notice = Some("Не удалось открыть временное окно.");
+                        }
+                    }
+                    Command::BookmarksList | Command::BookmarkToggle | Command::BookmarkRemove { .. } if preview && !private => {
+                        let mut updated = bookmarks.clone();
+                        let changed = match command {
+                            Command::BookmarkToggle => {
+                                let current = &tabs[active];
+                                let result = preview_url(&current.display_url)
+                                    .and_then(|(_, url)| updated.toggle(&url, &current.title));
+                                if result.is_none() {
+                                    notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                                }
+                                result.is_some()
+                            }
+                            Command::BookmarkRemove { value } => preview_url(&value)
+                                .is_some_and(|(_, url)| updated.remove(&url)),
+                            _ => false,
+                        };
+                        if changed {
+                            if bookmarks_path.as_ref().is_some_and(|path| save_preference(path, &updated).is_ok()) {
+                                bookmarks = updated;
+                            } else {
+                                notice = Some("Не удалось сохранить изменения в закладках.");
+                            }
+                        }
+                        if let Ok(json) = serde_json::to_string(bookmarks.entries()) {
+                            let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
+                        }
+                    }
+                    Command::HistoryList | Command::HistoryClear | Command::HistoryRemove { .. } if preview && !private => {
+                        let mut updated = history.clone();
+                        let changed = match command {
+                            Command::HistoryClear => updated.clear(),
+                            Command::HistoryRemove { value } => preview_url(&value)
+                                .is_some_and(|(_, url)| updated.remove(&url)),
+                            _ => false,
+                        };
+                        if changed {
+                            if history_path.as_ref().is_some_and(|path| save_preference(path, &updated).is_ok()) {
+                                history = updated;
+                            } else {
+                                notice = Some("Не удалось сохранить изменения в истории.");
+                            }
+                        }
+                        if let Ok(json) = serde_json::to_string(history.entries()) {
+                            let _ = chrome.evaluate_script(&format!("window.renderHistory({json})"));
+                        }
+                    }
+                    Command::SetSearchEngine { engine } => {
+                        if preview && !private && engine_path.as_ref().is_none_or(|path| save_preference(path, &engine).is_err()) {
+                            notice = Some("Не удалось сохранить поисковик. Выбор действует до перезапуска.");
                         }
                     }
                     Command::CancelAddress => {}
@@ -858,7 +1621,7 @@ fn main() {
                                         && tab.has_virtual_start_back() =>
                                 {
                                     // Some engines skip load_html in their native history.
-                                    if tab.view.load_html(include_str!("start.html")).is_ok() {
+                                    if tab.view.load_html(start_document(developer)).is_ok() {
                                         tab.local_navigation.store(false, Ordering::SeqCst);
                                         tab.start_forward_url = Some(std::mem::replace(
                                             &mut tab.display_url,
@@ -867,6 +1630,7 @@ fn main() {
                                         tab.page = Page::Start;
                                         tab.title = Page::Start.label().to_owned();
                                         tab.loading = false;
+                                        tab.load_watch.clear();
                                         tab.pending_start_return = false;
                                     }
                                 }
@@ -881,6 +1645,8 @@ fn main() {
                     Command::Reload if !matches!(tabs[active].page, Page::Start) => {
                         if tabs[active].view.reload().is_err() {
                             notice = Some("Не удалось обновить страницу.");
+                        } else if preview {
+                            tabs[active].load_watch.start(Instant::now());
                         }
                     }
                     Command::Forward if !tabs[active].loading => {
@@ -891,6 +1657,7 @@ fn main() {
                                 notice = Some("Чтобы открыть локальную страницу, введи её адрес.");
                             } else if tab.view.load_url(&url).is_ok() {
                                 tab.loading = true;
+                                if preview { tab.load_watch.start(Instant::now()); }
                             } else {
                                 tab.start_forward_url = Some(url);
                                 notice = Some("Не удалось открыть следующую страницу.");
@@ -913,7 +1680,7 @@ fn main() {
                 ..
             } => {
                 let (chrome_rect, content_rect) = bounds(&window);
-                let _ = chrome.set_bounds(chrome_rect);
+                let _ = chrome.set_bounds(if composer_visible { full_window_bounds(&window) } else { chrome_rect });
                 if let Some((view, _)) = &shared_start {
                     let _ = view.set_bounds(content_rect);
                 }
@@ -927,6 +1694,27 @@ fn main() {
                 event: WindowEvent::CloseRequested,
                 ..
             } => *control_flow = ControlFlow::Exit,
+            Event::LoopDestroyed => {
+                #[cfg(target_os = "macos")]
+                drop(shortcut_monitor.take());
+                #[cfg(target_os = "macos")]
+                if let Some((cancel, worker)) = download_job.take() {
+                    cancel.cancel();
+                    let _ = worker.join();
+                }
+                if let Some(path) = &session_path {
+                    let session = SavedSession {
+                        active,
+                        tabs: tabs.iter().map(|tab| {
+                            (tab.display_url.len() <= 16 * 1024).then(|| preview_url(&tab.display_url)).flatten()
+                                .map_or_else(|| Page::Start.url().to_owned(), |(_, url)| url.into())
+                        }).collect(),
+                    };
+                    if let Err(error) = save_preference(path, &session) {
+                        eprintln!("Search could not save its session: {error}");
+                    }
+                }
+            }
             _ => {}
         }
     });
@@ -935,6 +1723,141 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_distinguishes_domain_search_and_unsupported_addresses() {
+        assert_eq!(
+            preview_destination("github.com", SearchEngine::Google)
+                .unwrap()
+                .1,
+            "https://github.com/"
+        );
+        for (engine, host, key) in [
+            (SearchEngine::Google, "www.google.com", "q"),
+            (SearchEngine::Yandex, "ya.ru", "text"),
+            (SearchEngine::DuckDuckGo, "duckduckgo.com", "q"),
+            (SearchEngine::Bing, "www.bing.com", "q"),
+        ] {
+            let query = "Rust & async #тест";
+            let (_, address) = preview_destination(query, engine).unwrap();
+            let address = Url::parse(&address).unwrap();
+            assert_eq!(address.host_str(), Some(host));
+            assert_eq!(
+                address.query_pairs().collect::<Vec<_>>(),
+                vec![(key.into(), query.into())]
+            );
+        }
+        for blocked in [
+            "http://github.com/",
+            "localhost",
+            "127.0.0.1",
+            "file:///tmp/test",
+            "mailto:test@example.org trailing",
+            "github.com/settings?token=example trailing",
+        ] {
+            assert!(
+                preview_destination(blocked, SearchEngine::Google).is_none(),
+                "{blocked}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_engine_preference_survives_reopen_and_handles_invalid_data() {
+        let root = env::temp_dir().join(format!("search-engine-test-{}", process::id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("search-engine.json");
+        assert_eq!(load_search_engine(&path), SearchEngine::Google);
+        save_preference(&path, &SearchEngine::DuckDuckGo).unwrap();
+        assert_eq!(load_search_engine(&path), SearchEngine::DuckDuckGo);
+        save_preference(&path, &SearchEngine::Yandex).unwrap();
+        assert_eq!(load_search_engine(&path), SearchEngine::Yandex);
+        fs::write(&path, br#""unknown""#).unwrap();
+        assert_eq!(load_search_engine(&path), SearchEngine::Google);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn session_load_limits_tabs_and_ignores_broken_files() {
+        let root = env::temp_dir().join(format!("search-session-test-{}", process::id()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("session.json");
+        let saved = SavedSession {
+            active: 100,
+            tabs: vec!["https://example.org/".to_owned(); MAX_TABS + 2],
+        };
+        save_preference(&path, &saved).unwrap();
+        let restored = load_session(&path).unwrap();
+        assert_eq!(restored.tabs.len(), MAX_TABS);
+        assert_eq!(restored.active, MAX_TABS - 1);
+        fs::write(&path, b"{").unwrap();
+        assert!(load_session(&path).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn load_timeout_is_reported_once_and_recovers() {
+        assert!(only_fragment_changed(
+            "https://example.org/#one",
+            "https://example.org/#two"
+        ));
+        assert!(!only_fragment_changed(
+            "https://example.org/a#one",
+            "https://example.org/b#two"
+        ));
+        let start = Instant::now();
+        let mut watch = LoadWatch::default();
+        watch.start(start);
+        assert!(!watch.expire(start + Duration::from_secs(1)));
+        assert!(watch.expire(start + PAGE_LOAD_TIMEOUT));
+        assert!(watch.timed_out);
+        assert!(!watch.expire(start + PAGE_LOAD_TIMEOUT));
+        watch.start(start);
+        assert!(!watch.timed_out);
+        watch.clear();
+        assert!(!watch.expire(start + PAGE_LOAD_TIMEOUT));
+    }
+
+    #[test]
+    fn developer_addresses_use_only_explicit_loopback_hosts() {
+        assert_eq!(
+            developer_destination("localhost:3000/docs").unwrap().1,
+            "http://127.0.0.1:3000/docs"
+        );
+        assert_eq!(
+            developer_destination("http://[::1]:8080/").unwrap().1,
+            "http://[::1]:8080/"
+        );
+        for url in [
+            "http://192.168.0.1:3000/",
+            "https://example.org/",
+            "http://@localhost:3000/",
+            "file:///tmp/test",
+        ] {
+            assert!(developer_destination(url).is_none(), "{url}");
+        }
+        assert!(preview_url("http://127.0.0.1:3000/").is_none());
+    }
+
+    #[test]
+    fn https_preview_accepts_new_sites_without_widening_normal_navigation() {
+        let site = "https://developer.mozilla.org/ru/docs/Web/HTML";
+        assert!(navigation_url(site, false).is_none());
+        assert!(matches!(navigation_url(site, true), Some((Page::Web, _))));
+        for denied in [
+            "http://developer.mozilla.org/",
+            "https://developer.mozilla.org:8443/",
+            "https://@developer.mozilla.org/",
+            "https://127.0.0.1/",
+            "https://app.localhost./",
+            "http://127.0.0.1:43127/",
+            "file:///tmp/search-preview.html",
+            "mailto:search@example.org",
+        ] {
+            assert!(navigation_url(denied, true).is_none(), "{denied}");
+        }
+    }
 
     #[test]
     fn navigation_accepts_only_exact_origins() {
@@ -1036,14 +1959,14 @@ mod tests {
 
     #[test]
     fn back_to_embedded_start_restores_display_address() {
-        let (page, url) = loaded_page("https://rust-lang.org/", false).unwrap();
+        let (page, url) = loaded_page("https://rust-lang.org/", false, false, false).unwrap();
         assert!(matches!(page, Page::Rust));
         assert_eq!(url, "https://rust-lang.org/");
-        let (page, url) = loaded_page("about:blank", true).unwrap();
+        let (page, url) = loaded_page("about:blank", true, false, false).unwrap();
         assert!(matches!(page, Page::Start));
         assert_eq!(url, "search:start");
-        assert!(loaded_page("about:blank", false).is_none());
-        let (page, url) = loaded_page("https://rust-lang.org/learn", true).unwrap();
+        assert!(loaded_page("about:blank", false, false, false).is_none());
+        let (page, url) = loaded_page("https://rust-lang.org/learn", true, false, false).unwrap();
         assert!(matches!(page, Page::Rust));
         assert_eq!(url, "https://rust-lang.org/learn");
     }

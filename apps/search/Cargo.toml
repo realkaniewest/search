@@ -14,3 +14,13 @@ wry = "=0.57.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "=0.18.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "=0.6.2"
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSEvent", "NSWindow", "NSSavePanel", "block2"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["NSString", "NSURL"] }
+tempfile = "=3.27.0"
+
+[patch.crates-io]
+wry = { path = "vendor/wry" }
