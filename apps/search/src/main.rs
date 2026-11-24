@@ -835,12 +835,15 @@ fn create_content(
 }
 
 fn main() {
-    let mode = match env::args().skip(1).collect::<Vec<_>>().as_slice() {
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    let return_to_search = args == ["--developer-preview", "--from-search"];
+    let mode = match args.as_slice() {
         [] => Mode::Normal,
         [flag] if flag == "--smoke" => Mode::Smoke,
         [flag] if flag == "--security-smoke" => Mode::SecuritySmoke,
         [flag] if flag == "--https-preview" && HAS_HTTPS_PREVIEW => Mode::HttpsPreview,
         [flag] if flag == "--developer-preview" && HAS_HTTPS_PREVIEW => Mode::DeveloperPreview,
+        _ if return_to_search && HAS_HTTPS_PREVIEW => Mode::DeveloperPreview,
         [flag] if flag == "--private-preview" && HAS_HTTPS_PREVIEW => Mode::PrivatePreview,
         _ => {
             eprintln!("Usage: search-browser [--smoke|--security-smoke]");
@@ -931,7 +934,9 @@ fn main() {
     let chrome_builder = WebViewBuilder::new()
         .with_bounds(chrome_rect)
         .with_html(include_str!("chrome.html"))
-        .with_initialization_script(if developer {
+        .with_initialization_script(if return_to_search {
+            "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview', 'developer-preview', 'developer-from-search'));"
+        } else if developer {
             "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview', 'developer-preview'));"
         } else if private {
             "document.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac-toolbar', 'https-preview', 'private-preview'));"
@@ -1207,7 +1212,7 @@ fn main() {
                     if preview && url != "about:blank" && tab.load_watch.deadline.is_none() {
                         tab.load_watch.start(Instant::now());
                     }
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return || matches!(tab.page, Page::Start), preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.title = page.label().to_owned();
@@ -1235,7 +1240,7 @@ fn main() {
                             tab.load_watch.clear();
                         }
                     }
-                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return, preview, developer) {
+                    if let Some((page, display_url)) = loaded_page(&url, tab.pending_start_return || matches!(tab.page, Page::Start), preview, developer) {
                         tab.page = page;
                         tab.display_url = display_url;
                         tab.pending_start_return = false;
@@ -1542,7 +1547,7 @@ fn main() {
                     }
                     Command::DeveloperWindow if preview && !private => {
                         let opened = env::current_exe().and_then(|binary| {
-                            process::Command::new(binary).arg("--developer-preview").spawn()
+                            process::Command::new(binary).args(["--developer-preview", "--from-search"]).spawn()
                         });
                         if opened.is_err() {
                             notice = Some("Не удалось открыть окно разработки.");
@@ -1614,6 +1619,12 @@ fn main() {
                     Command::CancelAddress => {}
                     Command::Back => {
                         let tab = &mut tabs[active];
+                        if return_to_search && matches!(tab.page, Page::Start)
+                            && (tab.start_forward_url.is_some() || !matches!(tab.view.can_go_back(), Ok(true)))
+                        {
+                            *control_flow = ControlFlow::Exit;
+                            return;
+                        }
                         if tab.start_forward_url.is_none() {
                             match tab.view.can_go_back() {
                                 Ok(false)
@@ -1642,7 +1653,9 @@ fn main() {
                             }
                         }
                     }
-                    Command::Reload if !matches!(tabs[active].page, Page::Start) => {
+                    Command::Reload if !matches!(tabs[active].page, Page::Start)
+                        && tabs[active].display_url != "about:blank" =>
+                    {
                         if tabs[active].view.reload().is_err() {
                             notice = Some("Не удалось обновить страницу.");
                         } else if preview {

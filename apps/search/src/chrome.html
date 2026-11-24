@@ -756,13 +756,18 @@
     inspectPage.disabled = !state.tabs[state.active] || !/^https?:/.test(state.tabs[state.active].url) || Boolean(state.tabs[state.active].loading);
     if (tabsChanged) renderTabs(state, previous, activeChanged);
 
-    document.getElementById('back').disabled = !state.can_back;
-    document.getElementById('forward').disabled = !state.can_forward;
     const activeTab = state.tabs[state.active];
+    const returnToSearch = !state.can_back && activeTab?.url === 'search:start'
+      && document.documentElement?.classList.contains('developer-from-search');
+    const back = document.getElementById('back');
+    back.disabled = !state.can_back && !returnToSearch;
+    back.title = returnToSearch ? 'Вернуться в Search' : 'Назад';
+    back.setAttribute('aria-label', back.title);
+    document.getElementById('forward').disabled = !state.can_forward;
     const composeNewTab = focusNewTab &&
       state.tabs.length > previous.tabs.length && !previous.tabs.some(tab => tab.id === activeTab?.id);
     if (composeNewTab || state.notice) focusNewTab = false;
-    document.getElementById('reload').disabled = !activeTab || activeTab.url === 'search:start';
+    document.getElementById('reload').disabled = !activeTab || ['search:start', 'about:blank'].includes(activeTab.url);
     if(document.activeElement!==address || activeChanged) {
       const url = state.tabs[state.active]?.url;
       address.value = state.attempted_address ?? displayAddress(url);
