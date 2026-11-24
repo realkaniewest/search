@@ -75,7 +75,7 @@ Task { @MainActor in
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: folder) }
         let manifest = """
-        {"manifest_version":3,"name":"Search local test","version":"1.0","description":"Local test only","content_scripts":[{"matches":["http://localhost/*","http://127.0.0.1/*"],"js":["marker.js"]}]}
+        {"manifest_version":3,"name":"Search local test","version":"1.0","description":"Local test only","content_scripts":[{"matches":["http://localhost/*","http://127.0.0.1/*"],"js":["marker.js"],"all_frames":true}]}
         """
         try manifest.write(to: folder.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
         try "document.documentElement.dataset.searchExtensionProbe = 'ran';"
@@ -103,14 +103,29 @@ Task { @MainActor in
         context.setPermissionStatus(.deniedExplicitly, for: denied)
         try await check("allowed site", url: allowed, in: normal, marked: true)
         try await check("denied site", url: denied, in: normal, marked: false)
-        try await check("isolated view", url: allowed, in: isolated, marked: false)
+        let navigation = Navigation()
+        try await navigation.load(allowed.appendingPathComponent("frames"), in: normal)
+        let frameResult = try await normal.callAsyncJavaScript("""
+            for (let attempt = 0; attempt < 30; attempt++) {
+                const {allowed, denied} = window.frameReports;
+                if (typeof allowed === 'boolean' && typeof denied === 'boolean') {
+                    return allowed === true && denied === false;
+                }
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            return false;
+            """, arguments: [:], in: nil, contentWorld: .page)
+        guard frameResult as? Bool == true else {
+            throw ProbeError.unexpectedMarker("same-origin and cross-origin frames")
+        }
+        try await check("isolated Search chrome", url: allowed.appendingPathComponent("chrome"), in: isolated, marked: false)
         try await check("private view", url: allowed, in: privateView, marked: false)
         context.setPermissionStatus(.deniedExplicitly, for: allowed)
         try await check("revoked site", url: allowed, in: normal, marked: false)
         try controller.unload(context)
         guard !context.isLoaded else { throw ProbeError.contextStillLoaded }
         status = 0
-        print("PASS: WebKit executed the marker only for the allowed site and stopped after revocation")
+        print("PASS: WebKit executed the marker only for the allowed site and frame, and stopped after revocation")
     } catch {
         print("Extension test failed:", error)
     }

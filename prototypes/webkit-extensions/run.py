@@ -7,9 +7,36 @@ from threading import Thread
 from uuid import uuid4
 
 
+CHROME = Path(__file__).resolve().parents[2] / "apps/search/src/chrome.html"
+
+
 class Fixture(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = b"<!doctype html><title>Search WebKit extension fixture</title>"
+        port = self.server.server_port
+        if self.path == "/chrome":
+            body = CHROME.read_bytes()
+        elif self.path == "/frames":
+            body = f"""<!doctype html><title>Search frame fixture</title>
+<script>
+window.frameReports = {{}};
+addEventListener('message', event => {{
+    for (const frame of document.querySelectorAll('iframe')) {{
+        if (event.source === frame.contentWindow && event.origin === new URL(frame.src).origin &&
+            typeof event.data === 'boolean') window.frameReports[frame.id] = event.data;
+    }}
+}});
+</script>
+<iframe id="allowed" src="http://localhost:{port}/report"></iframe>
+<iframe id="denied" src="http://127.0.0.1:{port}/report"></iframe>""".encode()
+        elif self.path == "/report":
+            body = b"""<!doctype html><title>Search frame report</title>
+<script>
+addEventListener('load', () => setTimeout(() => {
+    parent.postMessage(document.documentElement.dataset.searchExtensionProbe === 'ran', '*');
+}, 150));
+</script>"""
+        else:
+            body = b"<!doctype html><title>Search WebKit extension fixture</title>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(body)))
