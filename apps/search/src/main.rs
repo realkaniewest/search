@@ -184,6 +184,68 @@ enum Palette {
     System,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+enum PageZoom {
+    #[serde(rename = "75")]
+    Small,
+    #[serde(rename = "90")]
+    Reduced,
+    #[default]
+    #[serde(rename = "100")]
+    Standard,
+    #[serde(rename = "110")]
+    Enlarged,
+    #[serde(rename = "125")]
+    Large,
+    #[serde(rename = "150")]
+    ExtraLarge,
+    #[serde(rename = "200")]
+    Double,
+}
+
+impl PageZoom {
+    fn apply(self, tab: &Tab) {
+        let factor = if matches!(tab.page, Page::Start) {
+            1.0
+        } else {
+            match self {
+                Self::Small => 0.75,
+                Self::Reduced => 0.9,
+                Self::Standard => 1.0,
+                Self::Enlarged => 1.1,
+                Self::Large => 1.25,
+                Self::ExtraLarge => 1.5,
+                Self::Double => 2.0,
+            }
+        };
+        let _ = tab.view.zoom(factor);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum DownloadFolder {
+    #[default]
+    Recent,
+    Downloads,
+    Desktop,
+    Documents,
+}
+
+#[cfg(target_os = "macos")]
+impl DownloadFolder {
+    fn directory(self) -> Option<PathBuf> {
+        let name = match self {
+            Self::Recent => return None,
+            Self::Downloads => "Downloads",
+            Self::Desktop => "Desktop",
+            Self::Documents => "Documents",
+        };
+        let home = PathBuf::from(env::var_os("HOME")?);
+        home.is_absolute().then(|| home.join(name))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 struct Settings {
@@ -195,6 +257,8 @@ struct Settings {
     opaque_toolbar: bool,
     restore_tabs: bool,
     record_history: bool,
+    page_zoom: PageZoom,
+    download_folder: DownloadFolder,
 }
 
 impl Default for Settings {
@@ -208,6 +272,8 @@ impl Default for Settings {
             opaque_toolbar: false,
             restore_tabs: true,
             record_history: true,
+            page_zoom: PageZoom::Standard,
+            download_folder: DownloadFolder::Recent,
         }
     }
 }
@@ -781,19 +847,20 @@ fn permits_content_navigation(target: &str, local_navigation: &AtomicBool) -> bo
     }
 }
 
-fn supports_separate_site_data_store() -> bool {
-    cfg!(target_os = "macos")
-        && process::Command::new("/usr/bin/sw_vers")
-            .arg("-productVersion")
-            .output()
-            .is_ok_and(|result| {
-                result.status.success()
-                    && String::from_utf8_lossy(&result.stdout)
-                        .split('.')
-                        .next()
-                        .and_then(|major| major.trim().parse::<u32>().ok())
-                        .is_some_and(|major| major >= 14)
-            })
+fn macos_major_version() -> Option<u32> {
+    let result = process::Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    if !result.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&result.stdout)
+        .split('.')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn create_content(
@@ -937,6 +1004,11 @@ fn main() {
     let developer = mode == Mode::DeveloperPreview;
     let private = mode == Mode::PrivatePreview || developer;
     let preview = mode == Mode::HttpsPreview || private;
+    let macos_version = (cfg!(target_os = "macos") && preview)
+        .then(macos_major_version)
+        .flatten()
+        .unwrap_or_default();
+    let supports_page_zoom = macos_version >= 11;
     let legacy_engine_path = preview.then(preference_path).flatten();
     let settings_path = legacy_engine_path
         .as_ref()
@@ -1017,7 +1089,7 @@ fn main() {
         fixture_mode: mode == Mode::SecuritySmoke,
         https_preview: preview,
         developer_preview: developer,
-        persistent_site_data: preview && !private && supports_separate_site_data_store(),
+        persistent_site_data: preview && !private && macos_version >= 14,
         ..SecurityCounts::default()
     });
     let ready_proxy = proxy.clone();
@@ -1268,6 +1340,9 @@ fn main() {
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if preview {
                     show_settings(&chrome, settings, private, None);
+                    if !supports_page_zoom {
+                        let _ = chrome.evaluate_script("document.getElementById('page-zoom-group').dataset.unavailable = 'true'");
+                    }
                 }
                 if preview && !private && let Ok(json) = serde_json::to_string(bookmarks.entries()) {
                     let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
@@ -1338,6 +1413,9 @@ fn main() {
                         if matches!(page, Page::Start) {
                             tab.title = page.label().to_owned();
                         }
+                    }
+                    if supports_page_zoom && !developer && (settings.page_zoom != PageZoom::Standard || matches!(tab.page, Page::Start)) {
+                        settings.page_zoom.apply(tab);
                     }
                     if settings.record_history && let Some(path) = &history_path
                         && let Some((_, visited)) = preview_url(&url)
@@ -1618,7 +1696,7 @@ fn main() {
                                 choosing_download_destination = true;
                                 let proxy = content_proxy.clone();
                                 let request_url = url.clone();
-                                macos_download::choose_destination(&chrome.ns_window(), &url, move |destination| {
+                                macos_download::choose_destination(&chrome.ns_window(), &url, settings.download_folder.directory().as_deref(), move |destination| {
                                     let _ = proxy.send_event(AppEvent::DownloadDestination(request_url.clone(), destination));
                                 });
                             } else {
@@ -1715,6 +1793,7 @@ fn main() {
                         show_settings(&chrome, settings, false, None);
                     }
                     Command::SaveSettings { settings: updated } if preview && !private => {
+                        let previous_zoom = settings.page_zoom;
                         let result = settings_path.as_deref().zip(legacy_engine_path.as_deref())
                             .ok_or(io::ErrorKind::NotFound.into())
                             .and_then(|(path, legacy)| update_settings(path, legacy, |current| {
@@ -1737,6 +1816,11 @@ fn main() {
                             }
                             Err(_) => "failed",
                         };
+                        if supports_page_zoom && settings.page_zoom != previous_zoom {
+                            for tab in &tabs {
+                                settings.page_zoom.apply(tab);
+                            }
+                        }
                         show_settings(&chrome, settings, false, Some(outcome));
                     }
                     Command::CancelAddress => {}
@@ -1933,6 +2017,8 @@ mod tests {
             opaque_toolbar: true,
             restore_tabs: false,
             record_history: false,
+            page_zoom: PageZoom::Large,
+            download_folder: DownloadFolder::Downloads,
         };
         fs::write(
             root.join(format!(".settings.json-{}.tmp", process::id())),

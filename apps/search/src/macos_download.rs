@@ -65,6 +65,7 @@ impl DownloadControl {
 pub(crate) fn choose_destination(
     window: &NSWindow,
     url: &Url,
+    directory: Option<&Path>,
     complete: impl Fn(Option<PathBuf>) + 'static,
 ) {
     let Some(main_thread) = MainThreadMarker::new() else {
@@ -79,6 +80,10 @@ pub(crate) fn choose_destination(
     panel.setMessage(Some(&NSString::from_str(
         "Выбери новое имя файла. Search сохраняет существующие файлы.",
     )));
+    if let Some(path) = directory.and_then(Path::to_str) {
+        let directory_url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(path), true);
+        panel.setDirectoryURL(Some(&directory_url));
+    }
     panel.setNameFieldStringValue(&NSString::from_str(&suggested_name(url)));
     let selected = panel.clone();
     let callback = block2::RcBlock::new(move |response| {
