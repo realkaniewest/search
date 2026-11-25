@@ -11,7 +11,11 @@ fn main() {
     };
     use objc2_foundation::{NSError, NSString, NSURL, NSUUID};
     use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
-    use std::time::{Duration, Instant};
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
     use tao::{
         event::Event,
         event_loop::{ControlFlow, EventLoopBuilder},
@@ -26,17 +30,39 @@ fn main() {
         UnexpectedChromeIpc,
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum Step {
+        Initial,
+        DeniedHost,
+        AlternatePort,
+        Disabled,
+        Reenabled,
+    }
+
     let args: Vec<_> = std::env::args().skip(1).collect();
-    assert_eq!(args.len(), 2, "expected loopback URL and profile UUID");
+    assert_eq!(
+        args.len(),
+        3,
+        "expected loopback URL, profile UUID and alternate port"
+    );
     let address = url::Url::parse(&args[0]).expect("valid fixture URL");
     assert_eq!(address.scheme(), "http");
     assert_eq!(address.host_str(), Some("localhost"));
+    let mut denied_host = address.clone();
+    denied_host
+        .set_host(Some("127.0.0.1"))
+        .expect("valid fixture host");
+    let mut alternate_port = address.clone();
+    alternate_port
+        .set_port(Some(args[2].parse().expect("valid alternate port")))
+        .expect("valid HTTP port");
+    assert_ne!(alternate_port.port(), address.port());
     let fixture = tempfile::tempdir().expect("create extension fixture directory");
     std::fs::write(
         fixture.path().join("manifest.json"),
         r#"{
         "manifest_version":3,"name":"Search fixture","version":"1.0",
-        "content_scripts":[{"matches":["http://localhost/*"],"js":["marker.js"]}]
+        "content_scripts":[{"matches":["http://localhost/*","http://127.0.0.1/*"],"js":["marker.js"]}]
     }"#,
     )
     .expect("write extension manifest");
@@ -86,6 +112,9 @@ fn main() {
     let context_class = class(c"WKWebExtensionContext");
     let completion_proxy = proxy.clone();
     let controller_for_callback = controller.clone();
+    let permission_url = fixture_url.clone();
+    let extension_context = Rc::new(RefCell::new(None));
+    let context_for_callback = extension_context.clone();
     let completion = block2::RcBlock::new(
         move |extension: *mut AnyObject, _error: *mut NSError| {
             let loaded = if extension.is_null() {
@@ -100,7 +129,8 @@ fn main() {
                     let loaded: Bool = msg_send![&*controller_for_callback, loadExtensionContext: &*context, error: &mut error];
                     if loaded.as_bool() {
                         // WKWebExtensionContextPermissionStatusGrantedExplicitly.
-                        let _: () = msg_send![&*context, setPermissionStatus: 3isize, forURL: &*fixture_url];
+                        let _: () = msg_send![&*context, setPermissionStatus: 3isize, forURL: &*permission_url];
+                        *context_for_callback.borrow_mut() = Some(context);
                     }
                     loaded.as_bool()
                 }
@@ -111,6 +141,7 @@ fn main() {
     let mut start_loading = Some((resource_url, completion));
     let mut views: Vec<WebView> = Vec::new();
     let mut seen = [false; 3];
+    let mut step = Step::Initial;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop_.run(move |event, _, flow| {
         if matches!(event, Event::LoopDestroyed) {
@@ -174,24 +205,75 @@ fn main() {
             }
             Event::UserEvent(Message::Ready(index)) => {
                 let responses = proxy.clone();
+                let expected_origin = match (index, step) {
+                    (0, Step::DeniedHost) => denied_host.origin().ascii_serialization(),
+                    (0, Step::AlternatePort) => alternate_port.origin().ascii_serialization(),
+                    (1, _) => "null".into(),
+                    _ => address.origin().ascii_serialization(),
+                };
+                let marker = match index {
+                    0 if matches!(step, Step::DeniedHost | Step::Disabled) =>
+                        "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
+                    0 => "document.documentElement.dataset.searchExtensionProbe === 'ran' && typeof window.ipc === 'undefined'",
+                    1 => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc?.postMessage === 'function'",
+                    _ => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
+                };
+                let script = format!("location.origin === {} && ({marker})",
+                                     serde_json::to_string(&expected_origin).unwrap());
                 views[index].evaluate_script_with_callback(
-                    match index {
-                        0 => "document.documentElement.dataset.searchExtensionProbe === 'ran' && typeof window.ipc === 'undefined'",
-                        1 => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc?.postMessage === 'function'",
-                        _ => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
-                    },
+                    &script,
                     move |value| { let _ = responses.send_event(Message::Checked(index, value == "true")); },
                 ).expect("read fixture marker");
             }
             Event::UserEvent(Message::Checked(index, true)) => {
-                seen[index] = true;
-                if seen.iter().all(|checked| *checked) {
-                    println!("PASS: extension ran in ordinary Wry content only; trusted chrome and temporary content stayed isolated");
-                    *flow = ControlFlow::ExitWithCode(0);
+                if matches!(step, Step::Initial) {
+                    seen[index] = true;
+                    if !seen.iter().all(|checked| *checked) {
+                        return;
+                    }
+                } else if index != 0 {
+                    return;
                 }
+                let url = match step {
+                    Step::Initial => {
+                        step = Step::DeniedHost;
+                        &denied_host
+                    }
+                    Step::DeniedHost => {
+                        step = Step::AlternatePort;
+                        &alternate_port
+                    }
+                    Step::AlternatePort | Step::Disabled => {
+                        let context = extension_context.borrow();
+                        let context = context.as_ref().expect("loaded extension context");
+                        let disabling = matches!(step, Step::AlternatePort);
+                        // load/unload are the public selectors for the same retained context.
+                        let changed: Bool = unsafe {
+                            let mut error: *mut NSError = std::ptr::null_mut();
+                            if disabling {
+                                msg_send![&*controller, unloadExtensionContext: &**context, error: &mut error]
+                            } else {
+                                msg_send![&*controller, loadExtensionContext: &**context, error: &mut error]
+                            }
+                        };
+                        if !changed.as_bool() {
+                            eprintln!("FAIL: could not change activation in {step:?}");
+                            *flow = ControlFlow::ExitWithCode(1);
+                            return;
+                        }
+                        step = if disabling { Step::Disabled } else { Step::Reenabled };
+                        &address
+                    }
+                    Step::Reenabled => {
+                        println!("PASS: Wry verified chrome and profile isolation, host and port scope, disable and re-enable");
+                        *flow = ControlFlow::ExitWithCode(0);
+                        return;
+                    }
+                };
+                views[0].load_url(url.as_str()).expect("navigate ordinary fixture");
             }
-            Event::UserEvent(Message::Checked(index, marked)) => {
-                eprintln!("FAIL: unexpected extension marker in view {index}: {marked}");
+            Event::UserEvent(Message::Checked(index, false)) => {
+                eprintln!("FAIL: unexpected extension state in view {index} during {step:?}");
                 *flow = ControlFlow::ExitWithCode(1);
             }
             Event::UserEvent(Message::UnexpectedChromeIpc) => {

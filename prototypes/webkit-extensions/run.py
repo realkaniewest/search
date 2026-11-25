@@ -73,7 +73,7 @@ if __name__ == "__main__":
         try:
             if options.wry_binary:
                 result = run([options.wry_binary.resolve(), f"http://localhost:{port}/",
-                              profile], timeout=30, check=False)
+                              profile, str(alternate.server_port)], timeout=30, check=False)
             else:
                 state = str(Path(temp) / "permissions.json")
                 arguments = [
