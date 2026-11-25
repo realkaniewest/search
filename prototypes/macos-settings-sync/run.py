@@ -94,7 +94,21 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     base.write_bytes(divergent)
     without_first = {**combined, "bookmarks": {**combined["bookmarks"]}}
     del without_first["bookmarks"]["https://example.test/"]
-    pending.write_text(json.dumps(without_first), encoding="utf-8")
+    pending.write_bytes(divergent)
+    profile_bookmarks = [
+        {"url": url, "title": title} for url, title in without_first["bookmarks"].items()
+    ]
+    if args.bookmark_reader:
+        run([reader], input=json.dumps(profile_bookmarks).encode(), check=True, timeout=10)
+    importer = [binary, "import-bookmarks", pending, combined["revision"]]
+    invalid_profile = json.dumps(profile_bookmarks + [profile_bookmarks[0]]).encode()
+    rejected = run(importer, input=invalid_profile, stdout=PIPE, timeout=10)
+    assert rejected.returncode == 1 and pending.read_bytes() == divergent
+    profile_bytes = json.dumps(profile_bookmarks).encode()
+    run(importer, input=profile_bytes, check=True, timeout=10)
+    after_import = pending.read_bytes()
+    stale = run(importer, input=json.dumps([]).encode(), stdout=PIPE, timeout=10)
+    assert stale.returncode == 3 and pending.read_bytes() == after_import
     run(reconcile, check=True, timeout=10)
     removed = snapshot.read_bytes()
     run(reconcile, check=True, timeout=10)

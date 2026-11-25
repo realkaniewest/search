@@ -39,13 +39,7 @@ struct Snapshot: Codable {
               info.st_size <= Self.maximumBytes else {
             throw ProbeError.invalidSnapshotFile
         }
-        var bytes = Data()
-        while bytes.count <= maximumBytes {
-            let length = min(64 * 1024, maximumBytes + 1 - bytes.count)
-            guard let chunk = try handle.read(upToCount: length), !chunk.isEmpty else { break }
-            bytes.append(chunk)
-        }
-        guard bytes.count <= maximumBytes else { throw ProbeError.invalidSnapshotFile }
+        let bytes = try readBounded(handle, maximumBytes: maximumBytes)
         let expected: Set<String> = ["version", "revision", "palette", "compactTabs", "bookmarks"]
         guard let fields = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
               Set(fields.keys).subtracting(["pageZoom"]) == expected,
@@ -79,6 +73,31 @@ struct Snapshot: Codable {
         guard data.count <= Self.maximumBytes else { throw ProbeError.invalidArguments }
         try data.write(to: url, options: .atomic)
     }
+}
+
+func readBounded(_ handle: FileHandle, maximumBytes: Int) throws -> Data {
+    var bytes = Data()
+    while bytes.count <= maximumBytes {
+        let length = min(64 * 1024, maximumBytes + 1 - bytes.count)
+        guard let chunk = try handle.read(upToCount: length), !chunk.isEmpty else { break }
+        bytes.append(chunk)
+    }
+    guard bytes.count <= maximumBytes else { throw ProbeError.invalidSnapshotFile }
+    return bytes
+}
+
+func importBookmarks() throws -> [String: String] {
+    let bytes = try readBounded(.standardInput, maximumBytes: Snapshot.maximumBytes)
+    let entries = try JSONDecoder().decode([[String: String]].self, from: bytes)
+    guard entries.count <= 500 else { throw ProbeError.invalidArguments }
+
+    var bookmarks: [String: String] = [:]
+    for entry in entries {
+        guard entry.count == 2, let address = entry["url"], let title = entry["title"],
+              bookmarks[address] == nil else { throw ProbeError.invalidArguments }
+        bookmarks[address] = title
+    }
+    return bookmarks
 }
 
 func mutate(_ url: URL, change: @escaping (inout Snapshot) throws -> Void) throws {
@@ -140,6 +159,10 @@ do {
         guard let revision = UUID(uuidString: arguments[2]), let palette = Palette(rawValue: arguments[3])
         else { throw ProbeError.invalidArguments }
         try update(url, expected: revision) { $0.palette = palette }
+    case "import-bookmarks" where arguments.count == 3:
+        guard let revision = UUID(uuidString: arguments[2]) else { throw ProbeError.invalidArguments }
+        let bookmarks = try importBookmarks()
+        try update(url, expected: revision) { $0.bookmarks = bookmarks }
     case "export-bookmarks" where arguments.count == 2:
         let snapshot = try Snapshot.read(url)
         let bookmarks = snapshot.bookmarks.keys.sorted().map { address in
