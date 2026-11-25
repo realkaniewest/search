@@ -237,6 +237,9 @@
   .setting-row input { width: 18px; height: 18px; accent-color: var(--settings-accent); flex: none; }
   .settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .settings-actions button[type="submit"] { background: var(--settings-accent); color: var(--settings-ink); font-weight: 650; }
+  .settings-secondary { color: inherit; background: var(--settings-bg); border: 1px solid var(--settings-line); border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  .settings-secondary:disabled { opacity: .55; cursor: default; }
+  #download-custom-path { overflow-wrap: anywhere; }
   .settings-actions button:disabled { opacity: .55; cursor: default; }
   #settings-status { color: var(--settings-muted); }
   :root[data-palette="midnight"] .bar { background: linear-gradient(110deg,#253958ee,#101a30ee); }
@@ -330,7 +333,8 @@
         <label class="setting-row"><span>Масштаб страниц<small>Применяется к сайтам в обычном и временном окне.</small></span><select name="page_zoom"><option value="75">75%</option><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option></select></label>
       </fieldset>
       <fieldset><legend>Загрузки</legend>
-        <label class="setting-row"><span>Начальная папка<small>Search откроет её в окне сохранения. Путь можно изменить перед скачиванием.</small></span><select name="download_folder"><option value="recent">Последняя использованная</option><option value="downloads">Загрузки</option><option value="desktop">Рабочий стол</option><option value="documents">Документы</option></select></label>
+        <label class="setting-row"><span>Начальная папка<small>Search откроет её в окне сохранения. Путь можно изменить перед скачиванием.</small></span><select name="download_folder"><option value="recent">Последняя использованная</option><option value="downloads">Загрузки</option><option value="desktop">Рабочий стол</option><option value="documents">Документы</option><option id="download-custom-option" value="custom" disabled>Выбранная папка</option></select></label>
+        <div class="setting-row"><span>Выбранная папка<small id="download-custom-path">Папка не выбрана</small><small>Путь сохраняется сразу после выбора.</small></span><button class="settings-secondary" id="choose-download-folder" type="button">Выбрать…</button></div>
       </fieldset>
       <fieldset><legend>Запуск и история</legend>
         <label class="setting-row"><span>Восстанавливать вкладки<small>Если выключено, следующий запуск начнётся с новой вкладки.</small></span><input type="checkbox" name="restore_tabs"></label>
@@ -710,13 +714,14 @@
     window.restoreSearchEngine(privateMode ? values.private_engine : values.engine);
     if (outcome === null) return;
     savingSettings = false;
-    if (outcome !== 'failed') fillSettings(values);
+    if (outcome === 'saved' || outcome === 'conflict') fillSettings(values);
     settingsEdited();
     if (settingsShowing) (settingsSave.disabled ? settingsClose : settingsSave).focus();
     settingsStatus.textContent = {
       saved:'Настройки сохранены',
       conflict:'Настройки изменились в другом окне. Загружены актуальные значения.',
       failed:'Не удалось сохранить настройки. Попробуйте ещё раз.',
+      'folder-unavailable':'Выбранная папка недоступна. Выбери новую папку или стандартный вариант.',
     }[outcome];
   };
   systemDark.addEventListener?.('change', applyAppearance);
@@ -761,6 +766,26 @@
     settingsSave.disabled = savingSettings || Object.keys(defaults).every(name => draft[name] === appliedSettings[name]);
     settingsStatus.textContent = settingsSave.disabled ? '' : 'Есть несохранённые изменения';
   }
+  const folderPicker = document.getElementById('choose-download-folder');
+  const customFolderOption = document.getElementById('download-custom-option');
+  const customFolderPath = document.getElementById('download-custom-path');
+  folderPicker.onclick = () => {
+    folderPicker.disabled = true;
+    send({type:'choose-download-folder'});
+  };
+  window.renderDownloadFolder = (path, result) => {
+    folderPicker.disabled = false;
+    customFolderOption.disabled = path === null;
+    customFolderPath.textContent = path ?? 'Папка не выбрана';
+    if (!settingsShowing) return;
+    if (result === 'selected') {
+      settingsForm.elements.namedItem('download_folder').value = 'custom';
+      settingsEdited();
+    } else if (result === 'failed') {
+      settingsStatus.textContent = 'Не удалось сохранить папку.';
+    }
+    if (result === 'selected' || result === 'failed' || result === 'cancelled') folderPicker.focus();
+  };
   settingsForm.addEventListener('change', settingsEdited);
   document.getElementById('settings-reset').onclick = () => {
     if (savingSettings) return;

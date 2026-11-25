@@ -143,6 +143,9 @@ enum Command {
     SaveSettings {
         settings: Settings,
     },
+    #[cfg(target_os = "macos")]
+    #[serde(rename = "choose-download-folder")]
+    ChooseDownloadFolder,
     #[serde(rename = "cancel-address")]
     CancelAddress,
     Back,
@@ -230,13 +233,14 @@ enum DownloadFolder {
     Downloads,
     Desktop,
     Documents,
+    Custom,
 }
 
 #[cfg(target_os = "macos")]
 impl DownloadFolder {
     fn directory(self) -> Option<PathBuf> {
         let name = match self {
-            Self::Recent => return None,
+            Self::Recent | Self::Custom => return None,
             Self::Downloads => "Downloads",
             Self::Desktop => "Desktop",
             Self::Documents => "Documents",
@@ -304,6 +308,19 @@ fn update_settings(
     let updated = update(load_settings(path, legacy_engine))?;
     save_preference(path, &updated)?;
     Ok(updated)
+}
+
+#[cfg(target_os = "macos")]
+fn load_download_folder(path: &Path) -> Option<PathBuf> {
+    let path: PathBuf = serde_json::from_slice(&read_profile_data(path, 16 * 1024)?).ok()?;
+    path.is_absolute().then_some(path)
+}
+
+#[cfg(target_os = "macos")]
+fn render_download_folder(chrome: &WebView, folder: Option<&Path>, result: &str) {
+    if let Ok(json) = serde_json::to_string(&(folder.and_then(Path::to_str), result)) {
+        let _ = chrome.evaluate_script(&format!("window.renderDownloadFolder(...{json})"));
+    }
 }
 
 fn show_settings(chrome: &WebView, settings: Settings, private: bool, saved: Option<&str>) {
@@ -402,6 +419,8 @@ enum AppEvent {
     NativeShortcut(macos_shortcuts::Shortcut),
     #[cfg(target_os = "macos")]
     DownloadDestination(Url, Option<PathBuf>),
+    #[cfg(target_os = "macos")]
+    DownloadFolderChosen(Option<PathBuf>),
     #[cfg(target_os = "macos")]
     DownloadFinished(macos_download::Outcome),
     ChromeReady,
@@ -1020,6 +1039,10 @@ fn main() {
             load_settings(path, legacy)
         });
     let profile_path = legacy_engine_path.as_ref().filter(|_| !private);
+    #[cfg(target_os = "macos")]
+    let custom_folder_path = profile_path.map(|path| path.with_file_name("download-folder.json"));
+    #[cfg(target_os = "macos")]
+    let mut custom_folder = custom_folder_path.as_deref().and_then(load_download_folder);
     let session_path = profile_path
         .as_ref()
         .map(|path| path.with_file_name("session.json"));
@@ -1175,6 +1198,8 @@ fn main() {
         local_navigation,
     }];
     let mut active = 0usize;
+    #[cfg(target_os = "macos")]
+    let mut choosing_custom_folder = false;
     let mut composer_visible = false;
     #[cfg(target_os = "macos")]
     let mut choosing_download_destination = false;
@@ -1306,6 +1331,19 @@ fn main() {
                 }
             }
             #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::DownloadFolderChosen(folder)) if choosing_custom_folder => {
+                choosing_custom_folder = false;
+                let result = match folder {
+                    Some(folder) if custom_folder_path.as_ref().is_some_and(|path| save_preference(path, &folder).is_ok()) => {
+                        custom_folder = Some(folder);
+                        "selected"
+                    }
+                    Some(_) => "failed",
+                    None => "cancelled",
+                };
+                render_download_folder(&chrome, custom_folder.as_deref(), result);
+            }
+            #[cfg(target_os = "macos")]
             Event::UserEvent(AppEvent::DownloadDestination(url, destination))
                 if choosing_download_destination && download_job.is_none() =>
             {
@@ -1340,6 +1378,10 @@ fn main() {
             Event::UserEvent(AppEvent::ChromeReady) => {
                 if preview {
                     show_settings(&chrome, settings, private, None);
+                    #[cfg(target_os = "macos")]
+                    if !private {
+                        render_download_folder(&chrome, custom_folder.as_deref(), "loaded");
+                    }
                     if !supports_page_zoom {
                         let _ = chrome.evaluate_script("document.getElementById('page-zoom-group').dataset.unavailable = 'true'");
                     }
@@ -1689,6 +1731,17 @@ fn main() {
                         }
                     }
                     #[cfg(target_os = "macos")]
+                    Command::ChooseDownloadFolder if preview && !private && composer_visible => {
+                        if !choosing_custom_folder {
+                            use wry::WebViewExtMacOS;
+                            choosing_custom_folder = true;
+                            let proxy = content_proxy.clone();
+                            macos_download::choose_folder(&chrome.ns_window(), move |folder| {
+                                let _ = proxy.send_event(AppEvent::DownloadFolderChosen(folder));
+                            });
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
                     Command::DownloadAddress { value } if preview && !private => {
                         if download_job.is_none() && !choosing_download_destination {
                             if let Some((_, url)) = preview_url(value.trim()) {
@@ -1696,7 +1749,17 @@ fn main() {
                                 choosing_download_destination = true;
                                 let proxy = content_proxy.clone();
                                 let request_url = url.clone();
-                                macos_download::choose_destination(&chrome.ns_window(), &url, settings.download_folder.directory().as_deref(), move |destination| {
+                                let directory = if settings.download_folder == DownloadFolder::Custom {
+                                    let chosen = custom_folder_path.as_deref().and_then(load_download_folder)
+                                        .filter(|path| path.is_dir());
+                                    if chosen.is_none() {
+                                        notice = Some("Выбранная папка недоступна. Укажите место сохранения в диалоге.");
+                                    }
+                                    chosen
+                                } else {
+                                    settings.download_folder.directory()
+                                };
+                                macos_download::choose_destination(&chrome.ns_window(), &url, directory.as_deref(), move |destination| {
                                     let _ = proxy.send_event(AppEvent::DownloadDestination(request_url.clone(), destination));
                                 });
                             } else {
@@ -1793,6 +1856,14 @@ fn main() {
                         show_settings(&chrome, settings, false, None);
                     }
                     Command::SaveSettings { settings: updated } if preview && !private => {
+                        #[cfg(target_os = "macos")]
+                        if updated.download_folder == DownloadFolder::Custom
+                            && !custom_folder_path.as_deref().and_then(load_download_folder).is_some_and(|folder| folder.is_dir())
+                        {
+                            render_download_folder(&chrome, None, "unavailable");
+                            show_settings(&chrome, settings, false, Some("folder-unavailable"));
+                            return;
+                        }
                         let previous_zoom = settings.page_zoom;
                         let result = settings_path.as_deref().zip(legacy_engine_path.as_deref())
                             .ok_or(io::ErrorKind::NotFound.into())
@@ -1998,6 +2069,21 @@ mod tests {
         fs::write(&path, br#""unknown""#).unwrap();
         assert_eq!(load_search_engine(&path), SearchEngine::Google);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn custom_download_folder_round_trips_and_rejects_relative_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("download-folder.json");
+        let folder = directory.path().join("Downloads & documents");
+        fs::create_dir(&folder).unwrap();
+        save_preference(&file, &folder).unwrap();
+        assert_eq!(load_download_folder(&file), Some(folder));
+        save_preference(&file, &Path::new("relative")).unwrap();
+        assert!(load_download_folder(&file).is_none());
+        fs::write(&file, b"not JSON").unwrap();
+        assert!(load_download_folder(&file).is_none());
     }
 
     #[test]

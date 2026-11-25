@@ -12,7 +12,7 @@ use std::{
 };
 
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSModalResponseOK, NSSavePanel, NSWindow};
+use objc2_app_kit::{NSModalResponseOK, NSOpenPanel, NSSavePanel, NSWindow};
 use objc2_foundation::{NSDictionary, NSString, NSURL, NSURLQuarantinePropertiesKey};
 use url::Url;
 
@@ -60,6 +60,33 @@ impl DownloadControl {
             )
             .is_ok()
     }
+}
+
+pub(crate) fn choose_folder(window: &NSWindow, complete: impl Fn(Option<PathBuf>) + 'static) {
+    let Some(main_thread) = MainThreadMarker::new() else {
+        complete(None);
+        return;
+    };
+    if window.attachedSheet().is_some() {
+        complete(None);
+        return;
+    }
+    let panel = NSOpenPanel::openPanel(main_thread);
+    panel.setCanChooseFiles(false);
+    panel.setCanChooseDirectories(true);
+    panel.setAllowsMultipleSelection(false);
+    panel.setPrompt(Some(&NSString::from_str("Выбрать папку")));
+    let selected = panel.clone();
+    let callback = block2::RcBlock::new(move |response| {
+        let folder = (response == NSModalResponseOK)
+            .then(|| selected.URL())
+            .flatten()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+            .filter(|path| path.is_absolute() && path.is_dir());
+        complete(folder);
+    });
+    panel.beginSheetModalForWindow_completionHandler(window, &callback);
 }
 
 pub(crate) fn choose_destination(
