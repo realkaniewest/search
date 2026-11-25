@@ -108,6 +108,40 @@ fn record_decision(
     else {
         return Ok(false);
     };
+    update_policy(path, policy, |rules| {
+        let site = rules.entry(origin).or_default();
+        for capability in request.capabilities {
+            site.insert(*capability, granted);
+        }
+        true
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn revoke_decision(
+    path: &Path,
+    policy: &mut PolicyFile,
+    origin: &str,
+    capability: Capability,
+) -> io::Result<bool> {
+    update_policy(path, policy, |rules| {
+        let Some(site) = rules.get_mut(origin) else {
+            return false;
+        };
+        let removed = site.remove(&capability).is_some();
+        if site.is_empty() {
+            rules.remove(origin);
+        }
+        removed
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn update_policy(
+    path: &Path,
+    policy: &mut PolicyFile,
+    change: impl FnOnce(&mut Rules) -> bool,
+) -> io::Result<bool> {
     let lock = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -127,9 +161,8 @@ fn record_decision(
         version: 1,
         rules: policy.rules.clone(),
     };
-    let site = updated.rules.entry(origin).or_default();
-    for capability in request.capabilities {
-        site.insert(*capability, granted);
+    if !change(&mut updated.rules) {
+        return Ok(false);
     }
     if serde_json::to_vec(&updated)?.len() > MAX_RULE_BYTES {
         return Err(io::ErrorKind::InvalidData.into());
@@ -339,4 +372,39 @@ fn even_a_saved_grant_cannot_make_an_unsupported_origin_eligible() {
         };
         assert!(!allowed(&rules, request, doc, true));
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn revocation_removes_only_the_selected_permission() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("permissions.json");
+    let origin = "https://example.test";
+    let doc = Document {
+        view: 1,
+        navigation: 1,
+        origin,
+    };
+    let request = Request {
+        document: doc,
+        top_origin: origin,
+        frame_origin: origin,
+        main_frame: true,
+        capabilities: &[Capability::Camera, Capability::Microphone],
+    };
+    let mut policy = PolicyFile {
+        version: 1,
+        rules: Rules::new(),
+    };
+    assert!(record_decision(&path, &mut policy, request, doc, true, true).unwrap());
+    assert!(revoke_decision(&path, &mut policy, origin, Capability::Camera).unwrap());
+    assert!(!allowed_from_profile(&path, request, doc, true));
+    let microphone = Request {
+        capabilities: &[Capability::Microphone],
+        ..request
+    };
+    assert!(allowed_from_profile(&path, microphone, doc, true));
+    assert!(!revoke_decision(&path, &mut policy, origin, Capability::Camera).unwrap());
+    assert!(revoke_decision(&path, &mut policy, origin, Capability::Microphone).unwrap());
+    assert!(load_policy(&path).unwrap().rules.is_empty());
 }
