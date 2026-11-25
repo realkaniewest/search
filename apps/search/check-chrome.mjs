@@ -67,7 +67,7 @@ class Element {
   }
 }
 
-const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page', 'toolbar', 'settings', 'settings-open', 'settings-close', 'settings-filter', 'settings-empty', 'settings-form', 'settings-save', 'settings-reset', 'settings-status'].map(id => [id, new Element()]));
+const elements = new Map(['tabs', 'address', 'notice', 'activity', 'add', 'back', 'forward', 'reload', 'tabs-left', 'tabs-right', 'composer', 'composer-panel', 'engine-toggle', 'engine-menu', 'engine-mark', 'engine-google', 'engine-yandex', 'engine-duckduckgo', 'engine-bing', 'history', 'history-open', 'history-filter', 'history-list', 'history-clear', 'history-close', 'history-status', 'bookmarks-open', 'bookmark-toggle', 'library-title', 'library-error', 'private-window', 'download-dialog', 'download-open', 'download-address', 'download-close', 'download-save', 'download-form', 'developer-window', 'inspect-page', 'toolbar', 'settings', 'settings-open', 'settings-close', 'settings-filter', 'settings-empty', 'settings-form', 'settings-save', 'settings-reset', 'settings-status', 'choose-download-folder', 'download-custom-option', 'download-custom-path'].map(id => [id, new Element()]));
 const document = {
   activeElement: null,
   documentElement: new Element(),
@@ -113,6 +113,23 @@ elements.get('settings-form').dispatch('submit');
 messages.pop();
 window.renderSettings({...savedSettings, record_history:false}, false, 'saved');
 assert.equal(elements.get('settings-save').disabled, true);
+elements.get('choose-download-folder').dispatch('click');
+assert.deepEqual(messages.pop(), {type:'choose-download-folder'});
+assert.equal(elements.get('choose-download-folder').disabled, true);
+window.renderDownloadFolder('/tmp/Search downloads', 'selected');
+assert.equal(elements.get('download-custom-path').textContent, '/tmp/Search downloads');
+assert.equal(elements.get('download-custom-option').disabled, false);
+assert.equal(controls.get('download_folder').value, 'custom');
+assert.equal(elements.get('settings-save').disabled, false);
+window.renderDownloadFolder('/tmp/Search downloads', 'cancelled');
+assert.equal(elements.get('download-custom-path').textContent, '/tmp/Search downloads');
+const customSettings = {...savedSettings, download_folder:'custom'};
+window.renderDownloadFolder('/tmp/Search downloads', 'loaded');
+window.renderSettings(customSettings, false, 'saved');
+assert.equal(elements.get('settings-save').disabled, true);
+window.renderDownloadFolder('/tmp/Another folder', 'selected');
+assert.equal(elements.get('settings-save').disabled, false);
+window.renderDownloadFolder('/tmp/Search downloads', 'loaded');
 elements.get('settings-close').dispatch('click');
 assert.deepEqual(messages.pop(), {type:'composer', visible:false});
 assert.equal(elements.get('toolbar').inert, false);
