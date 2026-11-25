@@ -49,6 +49,8 @@ use tao::platform::unix::WindowExtUnix;
 use wry::WebViewBuilderExtUnix;
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
+#[cfg(target_os = "macos")]
+use wry::WebViewExtMacOS;
 
 const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
@@ -441,6 +443,10 @@ enum AppEvent {
     },
     NavigationTick,
     SecurityProgress(u64),
+    #[cfg(target_os = "macos")]
+    FixturePermissionRequest(u64, &'static str),
+    #[cfg(target_os = "macos")]
+    FixturePermissionDismissed(bool),
     SecurityTick,
     TimedOut,
     Command(Command),
@@ -905,6 +911,8 @@ fn create_content(
         .map(|url| url.origin());
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
+    #[cfg(target_os = "macos")]
+    let permission_proxy = proxy.clone();
     let security_fixture = navigation_counts.fixture_mode && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
@@ -990,7 +998,8 @@ fn create_content(
     #[cfg(target_os = "macos")]
     let builder = if security_fixture {
         use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
-        builder.with_native_permission_observer(|origin, frame, request| {
+        let show_fixture_sheet = env::var_os("SEARCH_SMOKE_PERMISSION_SHEET").is_some();
+        builder.with_native_permission_observer(move |origin, frame, request| {
             // WebKit supplies these objects only for the duration of this callback.
             let source = |origin: &objc2_web_kit::WKSecurityOrigin| {
                 let (local_host, port) = unsafe {
@@ -1014,6 +1023,11 @@ fn create_content(
                 MacosPermissionRequest::Geolocation => "geolocation",
             };
             println!("SECURITY: {request_kind}_origin={callback_source} frame={frame_kind} frame_origin={frame_source}");
+            if show_fixture_sheet && frame_kind == "main"
+                && callback_source == "primary" && frame_source == "primary"
+            {
+                let _ = permission_proxy.send_event(AppEvent::FixturePermissionRequest(id, request_kind));
+            }
         })
     } else {
         builder
@@ -1225,6 +1239,17 @@ fn main() {
         local_navigation,
     }];
     let mut active = 0usize;
+    #[cfg(target_os = "macos")]
+    let require_fixture_permission_sheet =
+        mode == Mode::SecuritySmoke && env::var_os("SEARCH_SMOKE_PERMISSION_SHEET").is_some();
+    #[cfg(not(target_os = "macos"))]
+    let require_fixture_permission_sheet = false;
+    #[cfg(target_os = "macos")]
+    let mut fixture_permission_sheet: Option<objc2::rc::Retained<objc2_app_kit::NSAlert>> = None;
+    #[cfg(target_os = "macos")]
+    let mut fixture_permission_sheet_passed = false;
+    #[cfg(not(target_os = "macos"))]
+    let fixture_permission_sheet_passed = false;
     let mut composer_visible = false;
     #[cfg(target_os = "macos")]
     let mut site_data_pending = false;
@@ -1508,13 +1533,63 @@ fn main() {
                     security_reports[id as usize - 1] = true;
                 }
             }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::FixturePermissionRequest(id, kind))
+                if require_fixture_permission_sheet
+                    && !fixture_permission_sheet_passed
+                    && fixture_permission_sheet.is_none()
+                    && tabs[active].id == id
+                    && matches!(tabs[active].page, Page::LocalFixture) =>
+            {
+                use objc2::MainThreadMarker;
+                use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn};
+                use objc2_foundation::NSString;
+                let window = chrome.ns_window();
+                if window.attachedSheet().is_some() {
+                    return;
+                }
+                if let Some(main_thread) = MainThreadMarker::new() {
+                    let alert = NSAlert::new(main_thread);
+                    let explanation = if kind == "geolocation" {
+                        "Тестовый запрос к геолокации отклонён"
+                    } else {
+                        "Тестовый запрос к камере или микрофону отклонён"
+                    };
+                    alert.setMessageText(&NSString::from_str(explanation));
+                    alert.setInformativeText(&NSString::from_str(&format!("http://127.0.0.1:{LOCAL_ORIGIN_PORT}")));
+                    alert.addButtonWithTitle(&NSString::from_str("Закрыть"));
+                    let sheet_proxy = content_proxy.clone();
+                    let completion = block2::RcBlock::new(move |response| {
+                        let _ = sheet_proxy.send_event(AppEvent::FixturePermissionDismissed(response == NSAlertFirstButtonReturn));
+                    });
+                    alert.beginSheetModalForWindow_completionHandler(&window, Some(&completion));
+                    fixture_permission_sheet = Some(alert);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::FixturePermissionDismissed(dismissed))
+                if require_fixture_permission_sheet =>
+            {
+                fixture_permission_sheet = None;
+                fixture_permission_sheet_passed = dismissed;
+                println!("SECURITY: permission_sheet_dismissed={dismissed}");
+            }
             Event::UserEvent(AppEvent::SecurityTick) if mode == Mode::SecuritySmoke => {
+                #[cfg(target_os = "macos")]
+                if let Some(alert) = fixture_permission_sheet.as_ref() {
+                    let sheet = alert.window();
+                    let parent = chrome.ns_window();
+                    if parent.attachedSheet().is_some_and(|attached| std::ptr::eq(&*attached, &*sheet)) {
+                        parent.endSheet_returnCode(&sheet, objc2_app_kit::NSAlertFirstButtonReturn);
+                    }
+                }
                 let (nav, popup, download, permission) = security_counts.snapshot();
                 let first_ready = content_ready && chrome_ready && tabs.first().is_some_and(
                     |tab| tab.title == "Search security fixture ready"
                 );
                 // Wait for both the page report and the asynchronous WebView callbacks.
-                if first_ready && nav > 0 && download > 0 && security_reports[0]
+                if (!require_fixture_permission_sheet || fixture_permission_sheet_passed)
+                    && first_ready && nav > 0 && download > 0 && security_reports[0]
                     && !second_fixture_requested
                 {
                     second_fixture_requested = true;
@@ -1754,7 +1829,7 @@ fn main() {
                     Command::DownloadAddress { value } if preview && !private => {
                         if download_job.is_none() && !choosing_download_destination {
                             if let Some((_, url)) = preview_url(value.trim()) {
-                                use wry::WebViewExtMacOS;
+
                                 choosing_download_destination = true;
                                 let proxy = content_proxy.clone();
                                 let request_url = url.clone();
