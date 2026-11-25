@@ -2,6 +2,7 @@
 
 import http.server
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -204,6 +205,7 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
     thread.start()
     try:
         verify_origins = require_media_origin or require_geolocation_origin
+        deferred_geolocation = os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET") == "deferred-geolocation"
         Handler.frame_geolocation = require_geolocation_origin
         for attempt in range(3 if verify_origins else 2):
             # WebKit can reuse an earlier denial within a view. A fresh process
@@ -242,6 +244,9 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
             ):
                 print("FAIL: WebKit did not report the expected geolocation origin", file=sys.stderr)
                 return 1
+            if deferred_geolocation and run.stdout.count("SECURITY: deferred_geolocation_denied") != 1:
+                print("FAIL: expected one deferred geolocation denial", file=sys.stderr)
+                return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
                 return 1
@@ -262,7 +267,7 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                 permission_results = {
                     name: result.get(name) for name in ("camera", "microphone", "geolocation")
                 }
-                if require_geolocation_origin and permission_results["geolocation"] != "denied":
+                if (require_geolocation_origin or deferred_geolocation) and permission_results["geolocation"] != "denied":
                     print("FAIL: native geolocation denial did not reach the page", file=sys.stderr)
                     return 1
                 print(f"Permission results: {permission_results}")

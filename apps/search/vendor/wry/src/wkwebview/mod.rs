@@ -655,6 +655,8 @@ impl InnerWebView {
         attributes.permission_handler,
         #[cfg(target_os = "macos")]
         pl_attrs.native_permission_observer,
+        #[cfg(target_os = "macos")]
+        pl_attrs.geolocation_denial_handler,
       );
       let proto_ui_delegate = ProtocolObject::from_ref(&*ui_delegate);
       webview.setUIDelegate(Some(proto_ui_delegate));

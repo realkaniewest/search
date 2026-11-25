@@ -85,6 +85,18 @@ pub struct WryWebViewUIDelegateIvars {
   permission_handler: Option<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>,
   #[cfg(target_os = "macos")]
   native_permission_observer: Option<Box<crate::NativePermissionObserver>>,
+  #[cfg(target_os = "macos")]
+  geolocation_denial_handler: Option<Box<crate::GeolocationDenialHandler>>,
+}
+
+#[cfg(target_os = "macos")]
+struct DenyGeolocation(block2::RcBlock<dyn Fn(WKPermissionDecision)>);
+
+#[cfg(target_os = "macos")]
+impl Drop for DenyGeolocation {
+  fn drop(&mut self) {
+    self.0.call((WKPermissionDecision::Deny,));
+  }
 }
 
 define_class!(
@@ -107,6 +119,15 @@ define_class!(
       frame: &WKFrameInfo,
       decision_handler: &Block<dyn Fn(WKPermissionDecision)>,
     ) {
+      if let Some(handler) = &self.ivars().geolocation_denial_handler {
+        // WebKit expects a reply even if the application discards the request.
+        let block = unsafe { block2::RcBlock::copy(std::ptr::from_ref(decision_handler).cast_mut()) };
+        if let Some(block) = block {
+          let denial = DenyGeolocation(block);
+          handler(origin, frame, Box::new(move || drop(denial)));
+          return;
+        }
+      }
       decision_handler.call((WKPermissionDecision::Deny,));
       if let Some(observer) = &self.ivars().native_permission_observer {
         observer(origin, frame, crate::MacosPermissionRequest::Geolocation);
@@ -329,6 +350,7 @@ impl WryWebViewUIDelegate {
     new_window_req_handler: Option<Box<dyn Fn(String, NewWindowFeatures) -> NewWindowResponse>>,
     permission_handler: Option<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>,
     #[cfg(target_os = "macos")] native_permission_observer: Option<Box<crate::NativePermissionObserver>>,
+    #[cfg(target_os = "macos")] geolocation_denial_handler: Option<Box<crate::GeolocationDenialHandler>>,
   ) -> Retained<Self> {
     #[cfg(target_os = "ios")]
     let _new_window_req_handler = new_window_req_handler;
@@ -343,6 +365,8 @@ impl WryWebViewUIDelegate {
         permission_handler,
         #[cfg(target_os = "macos")]
         native_permission_observer,
+        #[cfg(target_os = "macos")]
+        geolocation_denial_handler,
       });
     unsafe { msg_send![super(delegate), init] }
   }

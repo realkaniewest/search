@@ -1590,6 +1590,8 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   webview_configuration: Option<Retained<objc2_web_kit::WKWebViewConfiguration>>,
   #[cfg(target_os = "macos")]
   native_permission_observer: Option<Box<NativePermissionObserver>>,
+  #[cfg(target_os = "macos")]
+  geolocation_denial_handler: Option<Box<GeolocationDenialHandler>>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1609,6 +1611,8 @@ impl Default for PlatformSpecificWebViewAttributes {
       webview_configuration: None,
       #[cfg(target_os = "macos")]
       native_permission_observer: None,
+      #[cfg(target_os = "macos")]
+      geolocation_denial_handler: None,
     }
   }
 }
@@ -1680,7 +1684,22 @@ type NativePermissionObserver = dyn Fn(
 );
 
 #[cfg(target_os = "macos")]
+type GeolocationDenialHandler = dyn Fn(
+  &objc2_web_kit::WKSecurityOrigin,
+  &objc2_web_kit::WKFrameInfo,
+  Box<dyn FnOnce()>,
+);
+
+#[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
+  /// Defer an explicit denial of a geolocation request. Dropping the reply also denies the request.
+  fn with_geolocation_denial_handler(
+    self,
+    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, Box<dyn FnOnce()>)
+      + 'static,
+  ) -> Self;
+
+
   /// Observe the native origin and frame of a permission request after the permission decision.
   /// The observer cannot change the permission decision.
   fn with_native_permission_observer(
@@ -1701,6 +1720,16 @@ pub trait WebViewBuilderExtMacos {
 
 #[cfg(target_os = "macos")]
 impl WebViewBuilderExtMacos for WebViewBuilder<'_> {
+  fn with_geolocation_denial_handler(
+    mut self,
+    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, Box<dyn FnOnce()>)
+      + 'static,
+  ) -> Self {
+    self.platform_specific.geolocation_denial_handler = Some(Box::new(handler));
+    self
+  }
+
+
   fn with_native_permission_observer(
     mut self,
     observer: impl Fn(
