@@ -1626,6 +1626,25 @@ fn main() {
                     if supports_page_zoom && !developer {
                         settings.page_zoom.apply(tab);
                     }
+                    #[cfg(target_os = "macos")]
+                    if mode == Mode::SecuritySmoke && id == 1
+                        && matches!(tab.page, Page::LocalFixture)
+                        && macos_major_version().is_some_and(|version| version >= 11)
+                    {
+                        let zoom = |view: &WebView| -> f64 {
+                            // pageZoom is public on macOS 11 and newer.
+                            unsafe { objc2::msg_send![&*view.webview(), pageZoom] }
+                        };
+                        PageZoom::ExtraLarge.apply(tab);
+                        let enlarged = zoom(&tab.view);
+                        PageZoom::Standard.apply(tab);
+                        if enlarged != 1.5 || zoom(&tab.view) != 1.0 || zoom(&chrome) != 1.0 {
+                            eprintln!("FAIL: WebKit page zoom did not apply and reset independently of chrome");
+                            *control_flow = ControlFlow::ExitWithCode(1);
+                            return;
+                        }
+                        println!("SMOKE: WebKit page zoom applied 150% and reset to 100%");
+                    }
                     if settings.record_history && let Some(path) = &history_path
                         && let Some((_, visited)) = preview_url(&url)
                     {
