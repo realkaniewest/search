@@ -10,6 +10,8 @@ mod macos_download;
 mod macos_shortcuts;
 #[cfg(target_os = "macos")]
 mod macos_site_data;
+#[cfg(test)]
+mod permission_policy_probe;
 
 use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
 use history::{History, MAX_HISTORY_BYTES};
