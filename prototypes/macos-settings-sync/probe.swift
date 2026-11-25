@@ -14,11 +14,17 @@ enum Palette: String, Codable {
     case graphite, midnight, paper, system
 }
 
+enum PageZoom: String, Codable {
+    case small = "75", reduced = "90", standard = "100", enlarged = "110"
+    case large = "125", extraLarge = "150", double = "200"
+}
+
 struct Snapshot: Codable {
     let version: Int
     var revision: UUID
     var palette: Palette
     var compactTabs: Bool
+    var pageZoom: PageZoom?
     var bookmarks: [String: String]
 
     static let maximumBytes = 4 * 1024 * 1024
@@ -42,7 +48,8 @@ struct Snapshot: Codable {
         guard bytes.count <= maximumBytes else { throw ProbeError.invalidSnapshotFile }
         let expected: Set<String> = ["version", "revision", "palette", "compactTabs", "bookmarks"]
         guard let fields = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-              Set(fields.keys) == expected else { throw ProbeError.unknownSnapshotFields }
+              Set(fields.keys).subtracting(["pageZoom"]) == expected,
+              !(fields["pageZoom"] is NSNull) else { throw ProbeError.unknownSnapshotFields }
         let snapshot = try JSONDecoder().decode(Self.self, from: bytes)
         try snapshot.validate()
         return snapshot
@@ -77,7 +84,7 @@ func mutate(_ url: URL, change: @escaping (inout Snapshot) throws -> Void) throw
             let before = current
             try change(&current)
             guard before.palette != current.palette || before.compactTabs != current.compactTabs ||
-                    before.bookmarks != current.bookmarks else { return }
+                    before.pageZoom != current.pageZoom || before.bookmarks != current.bookmarks else { return }
             current.revision = UUID()
             try current.write(coordinatedURL)
         }
@@ -104,6 +111,7 @@ func reconcile(_ url: URL, base: Snapshot, pending: Snapshot) throws {
     try mutate(url) { shared in
         shared.palette = try merge(base.palette, pending.palette, shared.palette, field: "palette")
         shared.compactTabs = try merge(base.compactTabs, pending.compactTabs, shared.compactTabs, field: "compactTabs")
+        shared.pageZoom = try merge(base.pageZoom, pending.pageZoom, shared.pageZoom, field: "pageZoom")
         for address in Set(base.bookmarks.keys).union(pending.bookmarks.keys).sorted() {
             shared.bookmarks[address] = try merge(base.bookmarks[address], pending.bookmarks[address],
                                                    shared.bookmarks[address], field: "bookmarks")
@@ -118,13 +126,17 @@ do {
     switch arguments[0] {
     case "seed" where arguments.count == 2:
         let snapshot = Snapshot(version: 1, revision: UUID(), palette: .graphite,
-                                compactTabs: true, bookmarks: ["https://example.test/": "Fixture"])
+                                compactTabs: true, pageZoom: .standard, bookmarks: ["https://example.test/": "Fixture"])
         try snapshot.write(url)
         print(snapshot.revision.uuidString)
     case "palette" where arguments.count == 4:
         guard let revision = UUID(uuidString: arguments[2]), let palette = Palette(rawValue: arguments[3])
         else { throw ProbeError.invalidArguments }
         try update(url, expected: revision) { $0.palette = palette }
+    case "page-zoom" where arguments.count == 4:
+        guard let revision = UUID(uuidString: arguments[2]), let zoom = PageZoom(rawValue: arguments[3])
+        else { throw ProbeError.invalidArguments }
+        try update(url, expected: revision) { $0.pageZoom = zoom }
     case "bookmark" where arguments.count == 5:
         guard let revision = UUID(uuidString: arguments[2]), let bookmark = URL(string: arguments[3]),
               bookmark.scheme == "https", bookmark.host != nil, bookmark.user == nil, bookmark.password == nil
