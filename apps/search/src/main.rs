@@ -412,6 +412,41 @@ fn load_session(path: &Path) -> Option<SavedSession> {
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum FixtureSheetMode {
+    Dismiss,
+    Navigate,
+    DeferredGeolocation,
+    DeferredGeolocationNavigate,
+}
+
+#[cfg(target_os = "macos")]
+impl FixtureSheetMode {
+    fn from_env() -> Option<Self> {
+        Some(
+            match env::var("SEARCH_SMOKE_PERMISSION_SHEET").ok()?.as_str() {
+                "1" => Self::Dismiss,
+                "navigation" => Self::Navigate,
+                "deferred-geolocation" => Self::DeferredGeolocation,
+                "deferred-geolocation-navigation" => Self::DeferredGeolocationNavigate,
+                _ => return None,
+            },
+        )
+    }
+
+    fn defers_geolocation(self) -> bool {
+        matches!(
+            self,
+            Self::DeferredGeolocation | Self::DeferredGeolocationNavigate
+        )
+    }
+
+    fn navigates(self) -> bool {
+        matches!(self, Self::Navigate | Self::DeferredGeolocationNavigate)
+    }
+}
+
+#[cfg(target_os = "macos")]
 type PendingFixtureDenial = (u64, Box<dyn FnOnce()>);
 
 #[cfg(target_os = "macos")]
@@ -1026,10 +1061,8 @@ fn create_content(
     #[cfg(target_os = "macos")]
     let builder = if security_fixture {
         use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
-        let sheet_mode = env::var_os("SEARCH_SMOKE_PERMISSION_SHEET");
-        let show_fixture_sheet = sheet_mode
-            .as_deref()
-            .is_some_and(|mode| mode != "deferred-geolocation");
+        let show_fixture_sheet =
+            FixtureSheetMode::from_env().is_some_and(|mode| !mode.defers_geolocation());
         builder.with_native_permission_observer(move |origin, frame, request| {
             // WebKit supplies these objects only for the duration of this callback.
             let source = |origin: &objc2_web_kit::WKSecurityOrigin| {
@@ -1066,17 +1099,18 @@ fn create_content(
     #[cfg(target_os = "macos")]
     let builder = if security_fixture
         && id == 1
-        && env::var_os("SEARCH_SMOKE_PERMISSION_SHEET").as_deref()
-            == Some(std::ffi::OsStr::new("deferred-geolocation"))
+        && FixtureSheetMode::from_env().is_some_and(FixtureSheetMode::defers_geolocation)
     {
         use wry::WebViewBuilderExtMacos;
+        let deferred_once = std::cell::Cell::new(false);
         builder.with_geolocation_denial_handler(move |origin, frame, deny| {
             let is_primary = |origin: &objc2_web_kit::WKSecurityOrigin| unsafe {
                 origin.protocol().to_string() == "http"
                     && origin.host().to_string() == "127.0.0.1"
                     && origin.port() == LOCAL_ORIGIN_PORT as isize
             };
-            if !unsafe { frame.isMainFrame() }
+            if deferred_once.get()
+                || !unsafe { frame.isMainFrame() }
                 || !is_primary(origin)
                 || !is_primary(&*unsafe { frame.securityOrigin() })
             {
@@ -1090,6 +1124,9 @@ fn create_content(
                 *pending = Some((id, deny));
                 true
             });
+            if stored {
+                deferred_once.set(true);
+            }
             if stored
                 && denial_proxy
                     .send_event(AppEvent::FixturePermissionRequest(id, "geolocation"))
@@ -1271,8 +1308,7 @@ fn main() {
     };
     #[cfg(target_os = "macos")]
     let fixture_navigation_test = mode == Mode::SecuritySmoke
-        && env::var_os("SEARCH_SMOKE_PERMISSION_SHEET").as_deref()
-            == Some(std::ffi::OsStr::new("navigation"));
+        && FixtureSheetMode::from_env().is_some_and(FixtureSheetMode::navigates);
     #[cfg(not(target_os = "macos"))]
     let fixture_navigation_test = false;
     let initial_url = if fixture_navigation_test {
@@ -1321,7 +1357,7 @@ fn main() {
     let mut active = 0usize;
     #[cfg(target_os = "macos")]
     let require_fixture_permission_sheet =
-        mode == Mode::SecuritySmoke && env::var_os("SEARCH_SMOKE_PERMISSION_SHEET").is_some();
+        mode == Mode::SecuritySmoke && FixtureSheetMode::from_env().is_some();
     #[cfg(not(target_os = "macos"))]
     let require_fixture_permission_sheet = false;
     #[cfg(target_os = "macos")]

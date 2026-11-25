@@ -128,7 +128,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/":
             data, kind = type(self).page, "text/html; charset=utf-8"
         elif self.path == "/permission-bootstrap":
-            data = b"""<!doctype html><title>Search permission bootstrap</title><script>
+            if os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET") == "deferred-geolocation-navigation":
+                data = b"""<!doctype html><title>Search geolocation bootstrap</title><script>
+navigator.geolocation?.getCurrentPosition(() => {}, () => {});
+</script>"""
+            else:
+                data = b"""<!doctype html><title>Search permission bootstrap</title><script>
 navigator.mediaDevices?.getUserMedia({audio: true}).then(stream => {
     stream.getTracks().forEach(track => track.stop());
 }, () => {});
@@ -205,7 +210,8 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
     thread.start()
     try:
         verify_origins = require_media_origin or require_geolocation_origin
-        deferred_geolocation = os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET") == "deferred-geolocation"
+        sheet_mode = os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET")
+        deferred_geolocation = sheet_mode in ("deferred-geolocation", "deferred-geolocation-navigation")
         Handler.frame_geolocation = require_geolocation_origin
         for attempt in range(3 if verify_origins else 2):
             # WebKit can reuse an earlier denial within a view. A fresh process
@@ -246,6 +252,11 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                 return 1
             if deferred_geolocation and run.stdout.count("SECURITY: deferred_geolocation_denied") != 1:
                 print("FAIL: expected one deferred geolocation denial", file=sys.stderr)
+                return 1
+            if sheet_mode == "deferred-geolocation-navigation" and (
+                "SECURITY: permission_sheet_dismissed=true navigation=true" not in run.stdout
+            ):
+                print("FAIL: navigation did not cancel the pending geolocation sheet", file=sys.stderr)
                 return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
