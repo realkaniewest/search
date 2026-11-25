@@ -38,6 +38,8 @@ fn main() {
         AlternatePort,
         Disabled,
         Reenabled,
+        RevokedHost,
+        RevokedAlternatePort,
     }
 
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -234,12 +236,12 @@ fn main() {
                 let responses = proxy.clone();
                 let expected_origin = match (index, step) {
                     (0, Step::DeniedHost) => denied_host.origin().ascii_serialization(),
-                    (0, Step::AlternatePort) => alternate_port.origin().ascii_serialization(),
+                    (0, Step::AlternatePort | Step::RevokedAlternatePort) => alternate_port.origin().ascii_serialization(),
                     (1, _) => "null".into(),
                     _ => address.origin().ascii_serialization(),
                 };
                 let marker = match index {
-                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled) =>
+                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled | Step::RevokedHost | Step::RevokedAlternatePort) =>
                         "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
                     0 => "document.documentElement.dataset.searchExtensionProbe === 'ran' && typeof window.ipc === 'undefined'",
                     1 => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc?.postMessage === 'function'",
@@ -302,7 +304,21 @@ fn main() {
                         &address
                     }
                     Step::Reenabled => {
-                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable and re-enable");
+                        let context = extension_context.borrow();
+                        let context = context.as_ref().expect("loaded extension context");
+                        // WKWebExtensionContextPermissionStatusUnknown removes the explicit grant.
+                        unsafe {
+                            let _: () = msg_send![&**context, setPermissionStatus: 0isize, forURL: &*fixture_url];
+                        }
+                        step = Step::RevokedHost;
+                        &address
+                    }
+                    Step::RevokedHost => {
+                        step = Step::RevokedAlternatePort;
+                        &alternate_port
+                    }
+                    Step::RevokedAlternatePort => {
+                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable, re-enable and revoke");
                         *flow = ControlFlow::ExitWithCode(0);
                         return;
                     }
