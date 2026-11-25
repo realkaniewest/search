@@ -126,6 +126,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             data, kind = type(self).page, "text/html; charset=utf-8"
+        elif self.path == "/permission-bootstrap":
+            data = b"""<!doctype html><title>Search permission bootstrap</title><script>
+navigator.mediaDevices?.getUserMedia({audio: true}).then(stream => {
+    stream.getTracks().forEach(track => track.stop());
+}, () => {});
+</script>"""
+            kind = "text/html; charset=utf-8"
         elif self.path == "/media-frame":
             data = MEDIA_FRAME.replace(b"%%GEOLOCATION%%", b"true" if self.frame_geolocation else b"false")
             kind = "text/html; charset=utf-8"

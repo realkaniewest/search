@@ -1200,6 +1200,17 @@ fn main() {
     } else {
         Page::Start
     };
+    #[cfg(target_os = "macos")]
+    let fixture_navigation_test = mode == Mode::SecuritySmoke
+        && env::var_os("SEARCH_SMOKE_PERMISSION_SHEET").as_deref()
+            == Some(std::ffi::OsStr::new("navigation"));
+    #[cfg(not(target_os = "macos"))]
+    let fixture_navigation_test = false;
+    let initial_url = if fixture_navigation_test {
+        "http://127.0.0.1:43127/permission-bootstrap"
+    } else {
+        initial_page.url()
+    };
     let start_selection = (mode != Mode::SecuritySmoke).then(|| Arc::new(AtomicU64::new(1)));
     #[cfg(target_os = "linux")]
     let (first, local_navigation) = create_content(
@@ -1208,7 +1219,7 @@ fn main() {
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        (initial_page, initial_page.url(), start_selection.clone()),
+        (initial_page, initial_url, start_selection.clone()),
         content_rect,
     )
     .expect("Search start page failed");
@@ -1218,7 +1229,7 @@ fn main() {
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        (initial_page, initial_page.url(), start_selection.clone()),
+        (initial_page, initial_url, start_selection.clone()),
         content_rect,
     )
     .expect("Search start page failed");
@@ -1245,7 +1256,10 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     let require_fixture_permission_sheet = false;
     #[cfg(target_os = "macos")]
-    let mut fixture_permission_sheet: Option<objc2::rc::Retained<objc2_app_kit::NSAlert>> = None;
+    let mut fixture_permission_sheet: Option<(
+        u64,
+        objc2::rc::Retained<objc2_app_kit::NSAlert>,
+    )> = None;
     #[cfg(target_os = "macos")]
     let mut fixture_permission_sheet_passed = false;
     #[cfg(not(target_os = "macos"))]
@@ -1451,6 +1465,16 @@ fn main() {
                 }
             }
             Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
+                #[cfg(target_os = "macos")]
+                if let Some((owner, alert)) = fixture_permission_sheet.as_ref()
+                    && *owner == id
+                {
+                    let parent = chrome.ns_window();
+                    let sheet = alert.window();
+                    if parent.attachedSheet().is_some_and(|attached| std::ptr::eq(&*attached, &*sheet)) {
+                        parent.endSheet_returnCode(&sheet, objc2_app_kit::NSModalResponseAbort);
+                    }
+                }
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
                     && (url == "about:blank" || if developer { developer_url(&url).is_some() } else { navigation_url(&url, preview).is_some() })
                 {
@@ -1542,7 +1566,7 @@ fn main() {
                     && matches!(tabs[active].page, Page::LocalFixture) =>
             {
                 use objc2::MainThreadMarker;
-                use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn};
+                use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSModalResponseAbort};
                 use objc2_foundation::NSString;
                 let window = chrome.ns_window();
                 if window.attachedSheet().is_some() {
@@ -1560,10 +1584,14 @@ fn main() {
                     alert.addButtonWithTitle(&NSString::from_str("Закрыть"));
                     let sheet_proxy = content_proxy.clone();
                     let completion = block2::RcBlock::new(move |response| {
-                        let _ = sheet_proxy.send_event(AppEvent::FixturePermissionDismissed(response == NSAlertFirstButtonReturn));
+                        let expected = if fixture_navigation_test { NSModalResponseAbort } else { NSAlertFirstButtonReturn };
+                        let _ = sheet_proxy.send_event(AppEvent::FixturePermissionDismissed(response == expected));
                     });
                     alert.beginSheetModalForWindow_completionHandler(&window, Some(&completion));
-                    fixture_permission_sheet = Some(alert);
+                    fixture_permission_sheet = Some((id, alert));
+                    if fixture_navigation_test {
+                        let _ = tabs[active].view.load_url(Page::LocalFixture.url());
+                    }
                 }
             }
             #[cfg(target_os = "macos")]
@@ -1572,11 +1600,13 @@ fn main() {
             {
                 fixture_permission_sheet = None;
                 fixture_permission_sheet_passed = dismissed;
-                println!("SECURITY: permission_sheet_dismissed={dismissed}");
+                println!("SECURITY: permission_sheet_dismissed={dismissed} navigation={fixture_navigation_test}");
             }
             Event::UserEvent(AppEvent::SecurityTick) if mode == Mode::SecuritySmoke => {
                 #[cfg(target_os = "macos")]
-                if let Some(alert) = fixture_permission_sheet.as_ref() {
+                if let Some((_, alert)) = fixture_permission_sheet.as_ref()
+                    && !fixture_navigation_test
+                {
                     let sheet = alert.window();
                     let parent = chrome.ns_window();
                     if parent.attachedSheet().is_some_and(|attached| std::ptr::eq(&*attached, &*sheet)) {
