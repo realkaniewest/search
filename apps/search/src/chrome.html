@@ -890,6 +890,7 @@
         e.preventDefault();
         const controls = [...settingsDialog.querySelectorAll('button, input, select')]
           .filter(control => control.offsetWidth && !control.disabled);
+        if (!controls.length) return;
         const index = controls.indexOf(document.activeElement);
         controls[(index < 0 ? (e.shiftKey ? controls.length - 1 : 0) :
           (index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length)].focus();
