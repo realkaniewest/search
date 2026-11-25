@@ -9,7 +9,7 @@ fn main() {
         rc::{Allocated, Retained},
         runtime::{AnyClass, AnyObject, Bool},
     };
-    use objc2_foundation::{NSError, NSString, NSURL, NSUUID};
+    use objc2_foundation::{NSError, NSSet, NSString, NSURL, NSUUID};
     use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
     use std::{
         cell::RefCell,
@@ -33,6 +33,7 @@ fn main() {
     #[derive(Clone, Copy, Debug)]
     enum Step {
         Initial,
+        GrantedHost,
         DeniedHost,
         AlternatePort,
         Disabled,
@@ -62,6 +63,7 @@ fn main() {
         fixture.path().join("manifest.json"),
         r#"{
         "manifest_version":3,"name":"Search fixture","version":"1.0",
+        "permissions":["storage"],
         "content_scripts":[{"matches":["http://localhost/*","http://127.0.0.1/*"],"js":["marker.js"]}]
     }"#,
     )
@@ -112,7 +114,6 @@ fn main() {
     let context_class = class(c"WKWebExtensionContext");
     let completion_proxy = proxy.clone();
     let controller_for_callback = controller.clone();
-    let permission_url = fixture_url.clone();
     let extension_context = Rc::new(RefCell::new(None));
     let context_for_callback = extension_context.clone();
     let completion = block2::RcBlock::new(
@@ -122,14 +123,40 @@ fn main() {
             } else {
                 // The block is called on the main actor and WebKit owns the extension argument.
                 unsafe {
+                    let name: Option<Retained<NSString>> = msg_send![&*extension, displayName];
+                    let version: Option<Retained<NSString>> =
+                        msg_send![&*extension, displayVersion];
+                    let permissions: Retained<NSSet<NSString>> =
+                        msg_send![&*extension, requestedPermissions];
+                    let patterns: Retained<NSSet<AnyObject>> =
+                        msg_send![&*extension, allRequestedMatchPatterns];
+                    let mut hosts: Vec<_> = patterns
+                        .iter()
+                        .map(|pattern| {
+                            let pattern: Retained<NSString> = msg_send![&*pattern, string];
+                            pattern.to_string()
+                        })
+                        .collect();
+                    hosts.sort_unstable();
+                    if name.as_deref().map(ToString::to_string).as_deref() != Some("Search fixture")
+                        || version.as_deref().map(ToString::to_string).as_deref() != Some("1.0")
+                        || permissions
+                            .iter()
+                            .map(|value| value.to_string())
+                            .collect::<Vec<_>>()
+                            != ["storage"]
+                        || hosts != ["http://127.0.0.1/*", "http://localhost/*"]
+                    {
+                        eprintln!("FAIL: unexpected extension metadata for review");
+                        let _ = completion_proxy.send_event(Message::ExtensionReady(false));
+                        return;
+                    }
                     let allocated: Allocated<AnyObject> = msg_send![context_class, alloc];
                     let context: Retained<AnyObject> =
                         msg_send![allocated, initForExtension: &*extension];
                     let mut error: *mut NSError = std::ptr::null_mut();
                     let loaded: Bool = msg_send![&*controller_for_callback, loadExtensionContext: &*context, error: &mut error];
                     if loaded.as_bool() {
-                        // WKWebExtensionContextPermissionStatusGrantedExplicitly.
-                        let _: () = msg_send![&*context, setPermissionStatus: 3isize, forURL: &*permission_url];
                         *context_for_callback.borrow_mut() = Some(context);
                     }
                     loaded.as_bool()
@@ -212,7 +239,7 @@ fn main() {
                     _ => address.origin().ascii_serialization(),
                 };
                 let marker = match index {
-                    0 if matches!(step, Step::DeniedHost | Step::Disabled) =>
+                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled) =>
                         "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
                     0 => "document.documentElement.dataset.searchExtensionProbe === 'ran' && typeof window.ipc === 'undefined'",
                     1 => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc?.postMessage === 'function'",
@@ -236,6 +263,16 @@ fn main() {
                 }
                 let url = match step {
                     Step::Initial => {
+                        let context = extension_context.borrow();
+                        let context = context.as_ref().expect("loaded extension context");
+                        // WKWebExtensionContextPermissionStatusGrantedExplicitly.
+                        unsafe {
+                            let _: () = msg_send![&**context, setPermissionStatus: 3isize, forURL: &*fixture_url];
+                        }
+                        step = Step::GrantedHost;
+                        &address
+                    }
+                    Step::GrantedHost => {
                         step = Step::DeniedHost;
                         &denied_host
                     }
@@ -265,7 +302,7 @@ fn main() {
                         &address
                     }
                     Step::Reenabled => {
-                        println!("PASS: Wry verified chrome and profile isolation, host and port scope, disable and re-enable");
+                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable and re-enable");
                         *flow = ControlFlow::ExitWithCode(0);
                         return;
                     }
