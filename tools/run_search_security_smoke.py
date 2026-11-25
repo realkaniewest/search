@@ -250,6 +250,9 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
             ):
                 print("FAIL: WebKit did not report the expected geolocation origin", file=sys.stderr)
                 return 1
+            if sheet_mode == "deferred-media" and run.stdout.count("SECURITY: deferred_media_denied") != 1:
+                print("FAIL: expected one deferred media denial", file=sys.stderr)
+                return 1
             if deferred_geolocation and run.stdout.count("SECURITY: deferred_geolocation_denied") != 1:
                 print("FAIL: expected one deferred geolocation denial", file=sys.stderr)
                 return 1
@@ -280,6 +283,11 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                 }
                 if (require_geolocation_origin or deferred_geolocation) and permission_results["geolocation"] != "denied":
                     print("FAIL: native geolocation denial did not reach the page", file=sys.stderr)
+                    return 1
+                if sheet_mode == "deferred-media" and any(
+                    permission_results[name] != "denied" for name in ("camera", "microphone")
+                ):
+                    print("FAIL: native media denial did not reach the page", file=sys.stderr)
                     return 1
                 print(f"Permission results: {permission_results}")
                 if (

@@ -1591,7 +1591,7 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   #[cfg(target_os = "macos")]
   native_permission_observer: Option<Box<NativePermissionObserver>>,
   #[cfg(target_os = "macos")]
-  geolocation_denial_handler: Option<Box<GeolocationDenialHandler>>,
+  native_permission_denial_handler: Option<Box<NativePermissionDenialHandler>>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1612,7 +1612,7 @@ impl Default for PlatformSpecificWebViewAttributes {
       #[cfg(target_os = "macos")]
       native_permission_observer: None,
       #[cfg(target_os = "macos")]
-      geolocation_denial_handler: None,
+      native_permission_denial_handler: None,
     }
   }
 }
@@ -1684,18 +1684,19 @@ type NativePermissionObserver = dyn Fn(
 );
 
 #[cfg(target_os = "macos")]
-type GeolocationDenialHandler = dyn Fn(
+type NativePermissionDenialHandler = dyn Fn(
   &objc2_web_kit::WKSecurityOrigin,
   &objc2_web_kit::WKFrameInfo,
+  MacosPermissionRequest,
   Box<dyn FnOnce()>,
 );
 
 #[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
-  /// Defer an explicit denial of a geolocation request. Dropping the reply also denies the request.
-  fn with_geolocation_denial_handler(
+  /// Defer an explicit denial of a native permission request. Dropping the reply also denies the request.
+  fn with_native_permission_denial_handler(
     self,
-    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, Box<dyn FnOnce()>)
+    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, MacosPermissionRequest, Box<dyn FnOnce()>)
       + 'static,
   ) -> Self;
 
@@ -1720,12 +1721,12 @@ pub trait WebViewBuilderExtMacos {
 
 #[cfg(target_os = "macos")]
 impl WebViewBuilderExtMacos for WebViewBuilder<'_> {
-  fn with_geolocation_denial_handler(
+  fn with_native_permission_denial_handler(
     mut self,
-    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, Box<dyn FnOnce()>)
+    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, MacosPermissionRequest, Box<dyn FnOnce()>)
       + 'static,
   ) -> Self {
-    self.platform_specific.geolocation_denial_handler = Some(Box::new(handler));
+    self.platform_specific.native_permission_denial_handler = Some(Box::new(handler));
     self
   }
 

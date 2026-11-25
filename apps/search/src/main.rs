@@ -416,6 +416,7 @@ fn load_session(path: &Path) -> Option<SavedSession> {
 enum FixtureSheetMode {
     Dismiss,
     Navigate,
+    DeferredMedia,
     DeferredGeolocation,
     DeferredGeolocationNavigate,
 }
@@ -427,6 +428,7 @@ impl FixtureSheetMode {
             match env::var("SEARCH_SMOKE_PERMISSION_SHEET").ok()?.as_str() {
                 "1" => Self::Dismiss,
                 "navigation" => Self::Navigate,
+                "deferred-media" => Self::DeferredMedia,
                 "deferred-geolocation" => Self::DeferredGeolocation,
                 "deferred-geolocation-navigation" => Self::DeferredGeolocationNavigate,
                 _ => return None,
@@ -434,11 +436,12 @@ impl FixtureSheetMode {
         )
     }
 
-    fn defers_geolocation(self) -> bool {
-        matches!(
-            self,
-            Self::DeferredGeolocation | Self::DeferredGeolocationNavigate
-        )
+    fn deferred_kind(self) -> Option<&'static str> {
+        match self {
+            Self::DeferredMedia => Some("media"),
+            Self::DeferredGeolocation | Self::DeferredGeolocationNavigate => Some("geolocation"),
+            _ => None,
+        }
     }
 
     fn navigates(self) -> bool {
@@ -447,28 +450,32 @@ impl FixtureSheetMode {
 }
 
 #[cfg(target_os = "macos")]
-type PendingFixtureDenial = (u64, Box<dyn FnOnce()>);
+type PendingFixtureDenial = (u64, &'static str, Box<dyn FnOnce()>);
 
 #[cfg(target_os = "macos")]
 thread_local! {
-    static FIXTURE_GEOLOCATION_DENIAL: std::cell::RefCell<Option<PendingFixtureDenial>> = const {
+    static FIXTURE_PERMISSION_DENIAL: std::cell::RefCell<Option<PendingFixtureDenial>> = const {
         std::cell::RefCell::new(None)
     };
 }
 
 #[cfg(target_os = "macos")]
-fn finish_fixture_geolocation(owner: Option<u64>) {
-    let pending = FIXTURE_GEOLOCATION_DENIAL.with(|pending| {
+fn finish_fixture_permission(owner: Option<u64>) {
+    let pending = FIXTURE_PERMISSION_DENIAL.with(|pending| {
         let mut pending = pending.borrow_mut();
-        if owner.is_none() || pending.as_ref().is_some_and(|(id, _)| Some(*id) == owner) {
+        if owner.is_none()
+            || pending
+                .as_ref()
+                .is_some_and(|(id, _, _)| Some(*id) == owner)
+        {
             pending.take()
         } else {
             None
         }
     });
-    if let Some((_, deny)) = pending {
+    if let Some((_, kind, deny)) = pending {
         deny();
-        println!("SECURITY: deferred_geolocation_denied");
+        println!("SECURITY: deferred_{kind}_denied");
     }
 }
 
@@ -1062,7 +1069,7 @@ fn create_content(
     let builder = if security_fixture {
         use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
         let show_fixture_sheet =
-            FixtureSheetMode::from_env().is_some_and(|mode| !mode.defers_geolocation());
+            FixtureSheetMode::from_env().is_some_and(|mode| mode.deferred_kind().is_none());
         builder.with_native_permission_observer(move |origin, frame, request| {
             // WebKit supplies these objects only for the duration of this callback.
             let source = |origin: &objc2_web_kit::WKSecurityOrigin| {
@@ -1097,31 +1104,37 @@ fn create_content(
         builder
     };
     #[cfg(target_os = "macos")]
-    let builder = if security_fixture
-        && id == 1
-        && FixtureSheetMode::from_env().is_some_and(FixtureSheetMode::defers_geolocation)
+    let builder = if let Some(kind) = (security_fixture && id == 1)
+        .then(FixtureSheetMode::from_env)
+        .flatten()
+        .and_then(FixtureSheetMode::deferred_kind)
     {
-        use wry::WebViewBuilderExtMacos;
+        use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
         let deferred_once = std::cell::Cell::new(false);
-        builder.with_geolocation_denial_handler(move |origin, frame, deny| {
+        builder.with_native_permission_denial_handler(move |origin, frame, request, deny| {
+            let request_kind = match request {
+                MacosPermissionRequest::MediaCapture(_) => "media",
+                MacosPermissionRequest::Geolocation => "geolocation",
+            };
             let is_primary = |origin: &objc2_web_kit::WKSecurityOrigin| unsafe {
                 origin.protocol().to_string() == "http"
                     && origin.host().to_string() == "127.0.0.1"
                     && origin.port() == LOCAL_ORIGIN_PORT as isize
             };
-            if deferred_once.get()
+            if request_kind != kind
+                || deferred_once.get()
                 || !unsafe { frame.isMainFrame() }
                 || !is_primary(origin)
                 || !is_primary(&*unsafe { frame.securityOrigin() })
             {
                 return;
             }
-            let stored = FIXTURE_GEOLOCATION_DENIAL.with(|pending| {
+            let stored = FIXTURE_PERMISSION_DENIAL.with(|pending| {
                 let mut pending = pending.borrow_mut();
                 if pending.is_some() {
                     return false;
                 }
-                *pending = Some((id, deny));
+                *pending = Some((id, kind, deny));
                 true
             });
             if stored {
@@ -1129,10 +1142,10 @@ fn create_content(
             }
             if stored
                 && denial_proxy
-                    .send_event(AppEvent::FixturePermissionRequest(id, "geolocation"))
+                    .send_event(AppEvent::FixturePermissionRequest(id, kind))
                     .is_err()
             {
-                finish_fixture_geolocation(Some(id));
+                finish_fixture_permission(Some(id));
             }
         })
     } else {
@@ -1694,7 +1707,7 @@ fn main() {
                 use objc2_foundation::NSString;
                 let window = chrome.ns_window();
                 if window.attachedSheet().is_some() {
-                    finish_fixture_geolocation(Some(id));
+                    finish_fixture_permission(Some(id));
                     return;
                 }
                 if let Some(main_thread) = MainThreadMarker::new() {
@@ -1721,14 +1734,14 @@ fn main() {
             }
             #[cfg(target_os = "macos")]
             Event::UserEvent(AppEvent::FixturePermissionRequest(id, _)) => {
-                finish_fixture_geolocation(Some(id));
+                finish_fixture_permission(Some(id));
             }
             #[cfg(target_os = "macos")]
             Event::UserEvent(AppEvent::FixturePermissionDismissed(dismissed))
                 if require_fixture_permission_sheet =>
             {
                 fixture_permission_sheet = None;
-                finish_fixture_geolocation(None);
+                finish_fixture_permission(None);
                 fixture_permission_sheet_passed = dismissed;
                 println!("SECURITY: permission_sheet_dismissed={dismissed} navigation={fixture_navigation_test}");
             }
@@ -2237,7 +2250,7 @@ fn main() {
             } => *control_flow = ControlFlow::Exit,
             Event::LoopDestroyed => {
                 #[cfg(target_os = "macos")]
-                finish_fixture_geolocation(None);
+                finish_fixture_permission(None);
                 #[cfg(target_os = "macos")]
                 drop(shortcut_monitor.take());
                 #[cfg(target_os = "macos")]
