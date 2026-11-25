@@ -85,6 +85,16 @@ fn load_policy(path: &Path) -> Option<PolicyFile> {
 }
 
 #[cfg(target_os = "macos")]
+fn allowed_from_profile(
+    path: &Path,
+    request: Request<'_>,
+    active: Document<'_>,
+    ordinary: bool,
+) -> bool {
+    load_policy(path).is_some_and(|policy| allowed(&policy.rules, request, active, ordinary))
+}
+
+#[cfg(target_os = "macos")]
 fn record_decision(
     path: &Path,
     policy: &mut PolicyFile,
@@ -105,11 +115,13 @@ fn record_decision(
         .truncate(false)
         .open(path.with_extension("lock"))?;
     lock.lock()?;
-    if path.try_exists()? {
-        let current = load_policy(path).ok_or(io::ErrorKind::InvalidData)?;
-        if current.rules != policy.rules {
-            return Err(io::ErrorKind::AlreadyExists.into());
-        }
+    let current_rules = if path.try_exists()? {
+        load_policy(path).ok_or(io::ErrorKind::InvalidData)?.rules
+    } else {
+        Rules::new()
+    };
+    if current_rules != policy.rules {
+        return Err(io::ErrorKind::AlreadyExists.into());
     }
     let mut updated = PolicyFile {
         version: 1,
@@ -158,7 +170,7 @@ fn disk_policy_applies_only_current_normal_window_decisions_and_fails_closed() {
     assert!(!path.exists());
     assert!(record_decision(&path, &mut policy, request, doc, true, true).unwrap());
     let mut other_window = load_policy(&path).unwrap();
-    assert!(allowed(&other_window.rules, request, doc, true));
+    assert!(allowed_from_profile(&path, request, doc, true));
     assert!(record_decision(&path, &mut policy, request, doc, true, false).unwrap());
     assert!(!allowed(
         &load_policy(&path).unwrap().rules,
@@ -179,6 +191,18 @@ fn disk_policy_applies_only_current_normal_window_decisions_and_fails_closed() {
         doc,
         true
     ));
+
+    assert!(allowed(&other_window.rules, request, doc, true));
+    assert!(!allowed_from_profile(&path, request, doc, true));
+    fs::remove_file(&path).unwrap();
+    assert!(!allowed_from_profile(&path, request, doc, true));
+    assert_eq!(
+        record_decision(&path, &mut other_window, request, doc, true, true)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(!path.exists());
 
     let unavailable = path.join("unavailable.json");
     assert!(record_decision(&unavailable, &mut policy, request, doc, true, true).is_err());
