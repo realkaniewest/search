@@ -307,6 +307,13 @@ fn update_settings(
     legacy_engine: &Path,
     update: impl FnOnce(Settings) -> io::Result<Settings>,
 ) -> io::Result<Settings> {
+    let _lock = lock_profile_file(path)?;
+    let updated = update(load_settings(path, legacy_engine))?;
+    save_preference(path, &updated)?;
+    Ok(updated)
+}
+
+fn lock_profile_file(path: &Path) -> io::Result<fs::File> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     fs::create_dir_all(parent)?;
     let lock = fs::OpenOptions::new()
@@ -316,9 +323,25 @@ fn update_settings(
         .truncate(false)
         .open(path.with_extension("lock"))?;
     lock.lock()?;
-    let updated = update(load_settings(path, legacy_engine))?;
-    save_preference(path, &updated)?;
-    Ok(updated)
+    Ok(lock)
+}
+
+fn update_bookmarks(
+    path: &Path,
+    update: impl FnOnce(&mut Bookmarks) -> bool,
+) -> io::Result<Bookmarks> {
+    let _lock = lock_profile_file(path)?;
+    let mut bookmarks = if path.try_exists()? {
+        read_profile_data(path, MAX_BOOKMARK_BYTES)
+            .and_then(|bytes| Bookmarks::from_json(&bytes))
+            .ok_or(io::ErrorKind::InvalidData)?
+    } else {
+        Bookmarks::default()
+    };
+    if update(&mut bookmarks) {
+        save_preference(path, &bookmarks)?;
+    }
+    Ok(bookmarks)
 }
 
 fn show_settings(chrome: &WebView, settings: Settings, private: bool, saved: Option<&str>) {
@@ -2050,27 +2073,24 @@ fn main() {
                         }
                     }
                     Command::BookmarksList | Command::BookmarkToggle | Command::BookmarkRemove { .. } if preview && !private => {
-                        let mut updated = bookmarks.clone();
-                        let changed = match command {
-                            Command::BookmarkToggle => {
-                                let current = &tabs[active];
-                                let result = preview_url(&current.display_url)
-                                    .and_then(|(_, url)| updated.toggle(&url, &current.title));
-                                if result.is_none() {
-                                    notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                        let result = bookmarks_path.as_deref().ok_or(io::ErrorKind::NotFound.into())
+                            .and_then(|path| update_bookmarks(path, |updated| match command {
+                                Command::BookmarkToggle => {
+                                    let current = &tabs[active];
+                                    let result = preview_url(&current.display_url)
+                                        .and_then(|(_, url)| updated.toggle(&url, &current.title));
+                                    if result.is_none() {
+                                        notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                                    }
+                                    result.is_some()
                                 }
-                                result.is_some()
-                            }
-                            Command::BookmarkRemove { value } => preview_url(&value)
-                                .is_some_and(|(_, url)| updated.remove(&url)),
-                            _ => false,
-                        };
-                        if changed {
-                            if bookmarks_path.as_ref().is_some_and(|path| save_preference(path, &updated).is_ok()) {
-                                bookmarks = updated;
-                            } else {
-                                notice = Some("Не удалось сохранить изменения в закладках.");
-                            }
+                                Command::BookmarkRemove { value } => preview_url(&value)
+                                    .is_some_and(|(_, url)| updated.remove(&url)),
+                                _ => false,
+                            }));
+                        match result {
+                            Ok(updated) => bookmarks = updated,
+                            Err(_) => notice = Some("Не удалось прочитать или сохранить закладки."),
                         }
                         if let Ok(json) = serde_json::to_string(bookmarks.entries()) {
                             let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
@@ -2339,6 +2359,28 @@ mod tests {
         fs::write(&path, br#""unknown""#).unwrap();
         assert_eq!(load_search_engine(&path), SearchEngine::Google);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bookmark_updates_preserve_other_writers_and_reject_corruption() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("bookmarks.json");
+        thread::scope(|scope| {
+            for address in ["https://example.test/one", "https://example.test/two"] {
+                let path = &path;
+                scope.spawn(move || {
+                    let url = Url::parse(address).unwrap();
+                    update_bookmarks(path, |bookmarks| bookmarks.add(&url, address)).unwrap();
+                });
+            }
+        });
+        let saved = update_bookmarks(&path, |_| false).unwrap();
+        assert_eq!(saved.entries().len(), 2);
+
+        fs::write(&path, b"{").unwrap();
+        assert!(update_bookmarks(&path, |_| true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"{");
     }
 
     #[test]
