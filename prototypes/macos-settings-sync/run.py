@@ -1,11 +1,16 @@
 """Check coordinated snapshot writes from independent local processes."""
 
+import argparse
 import json
 import os
 from pathlib import Path
 from subprocess import Popen, PIPE, run
 from tempfile import TemporaryDirectory
 
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--bookmark-reader", type=Path, help="Path to the Search sync_bookmarks_probe example")
+args = parser.parse_args()
 
 with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     work = Path(temporary)
@@ -64,6 +69,18 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     assert merged["palette"] == "system"
     assert merged["pageZoom"] == "150"
     assert merged["bookmarks"] == {**combined["bookmarks"], third_address: "Third"}
+    exported = run([binary, "export-bookmarks", snapshot], check=True, stdout=PIPE, timeout=10).stdout
+    assert json.loads(exported) == [
+        {"url": url, "title": title} for url, title in sorted(merged["bookmarks"].items())
+    ]
+    if args.bookmark_reader:
+        reader = args.bookmark_reader.resolve()
+        run([reader], input=exported, check=True, timeout=10)
+        duplicate = json.loads(exported)
+        duplicate.append(duplicate[0])
+        rejected = run([reader], input=json.dumps(duplicate).encode(), stderr=PIPE, timeout=10)
+        assert rejected.returncode != 0
+
     run(reconcile, check=True, timeout=10)
     assert snapshot.read_bytes() == saved
 

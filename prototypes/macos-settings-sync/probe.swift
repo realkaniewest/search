@@ -140,6 +140,12 @@ do {
         guard let revision = UUID(uuidString: arguments[2]), let palette = Palette(rawValue: arguments[3])
         else { throw ProbeError.invalidArguments }
         try update(url, expected: revision) { $0.palette = palette }
+    case "export-bookmarks" where arguments.count == 2:
+        let snapshot = try Snapshot.read(url)
+        let bookmarks = snapshot.bookmarks.keys.sorted().map { address in
+            ["url": address, "title": snapshot.bookmarks[address, default: ""]]
+        }
+        FileHandle.standardOutput.write(try JSONEncoder().encode(bookmarks))
     case "page-zoom" where arguments.count == 4:
         guard let revision = UUID(uuidString: arguments[2]), let zoom = PageZoom(rawValue: arguments[3])
         else { throw ProbeError.invalidArguments }
