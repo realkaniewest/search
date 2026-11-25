@@ -334,7 +334,7 @@
       </fieldset>
       <fieldset><legend>Загрузки</legend>
         <label class="setting-row"><span>Начальная папка<small>Search откроет её в окне сохранения. Путь можно изменить перед скачиванием.</small></span><select name="download_folder"><option value="recent">Последняя использованная</option><option value="downloads">Загрузки</option><option value="desktop">Рабочий стол</option><option value="documents">Документы</option><option id="download-custom-option" value="custom" disabled>Выбранная папка</option></select></label>
-        <div class="setting-row"><span>Выбранная папка<small id="download-custom-path">Папка не выбрана</small><small>Путь сохраняется сразу после выбора.</small></span><button class="settings-secondary" id="choose-download-folder" type="button">Выбрать…</button></div>
+        <div class="setting-row"><span>Выбранная папка<small id="download-custom-path">Папка не выбрана</small></span><button class="settings-secondary" id="choose-download-folder" type="button">Выбрать…</button></div>
       </fieldset>
       <fieldset><legend>Запуск и история</legend>
         <label class="setting-row"><span>Восстанавливать вкладки<small>Если выключено, следующий запуск начнётся с новой вкладки.</small></span><input type="checkbox" name="restore_tabs"></label>
@@ -761,9 +761,11 @@
   }
   settingsClose.onclick = closeSettings;
   settingsFilter.addEventListener('input', filterSettings);
+  let customFolderChanged = false;
   function settingsEdited() {
     const draft = readSettings();
-    settingsSave.disabled = savingSettings || Object.keys(defaults).every(name => draft[name] === appliedSettings[name]);
+    const folderChanged = draft.download_folder === 'custom' && customFolderChanged;
+    settingsSave.disabled = savingSettings || (!folderChanged && Object.keys(defaults).every(name => draft[name] === appliedSettings[name]));
     settingsStatus.textContent = settingsSave.disabled ? '' : 'Есть несохранённые изменения';
   }
   const folderPicker = document.getElementById('choose-download-folder');
@@ -777,8 +779,10 @@
     folderPicker.disabled = false;
     customFolderOption.disabled = path === null;
     customFolderPath.textContent = path ?? 'Папка не выбрана';
+    if (result === 'loaded' || result === 'unavailable') customFolderChanged = false;
     if (!settingsShowing) return;
     if (result === 'selected') {
+      customFolderChanged = true;
       settingsForm.elements.namedItem('download_folder').value = 'custom';
       settingsEdited();
     } else if (result === 'failed') {
