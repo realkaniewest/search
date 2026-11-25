@@ -1623,7 +1623,7 @@ fn main() {
                             tab.title = page.label().to_owned();
                         }
                     }
-                    if supports_page_zoom && !developer && (settings.page_zoom != PageZoom::Standard || matches!(tab.page, Page::Start)) {
+                    if supports_page_zoom && !developer {
                         settings.page_zoom.apply(tab);
                     }
                     if settings.record_history && let Some(path) = &history_path
@@ -2064,6 +2064,11 @@ fn main() {
                                 Ok(Settings { engine, ..current })
                             }).ok());
                         if let Some(updated) = saved {
+                            if supports_page_zoom && updated.page_zoom != settings.page_zoom {
+                                for tab in &tabs {
+                                    updated.page_zoom.apply(tab);
+                                }
+                            }
                             settings = updated;
                         } else {
                             notice = Some("Не удалось сохранить поисковик.");
