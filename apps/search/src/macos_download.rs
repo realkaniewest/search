@@ -80,7 +80,7 @@ pub(crate) fn choose_destination(
     panel.setMessage(Some(&NSString::from_str(
         "Выбери новое имя файла. Search сохраняет существующие файлы.",
     )));
-    if let Some(path) = directory.and_then(Path::to_str) {
+    if let Some(path) = initial_directory(directory) {
         let directory_url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(path), true);
         panel.setDirectoryURL(Some(&directory_url));
     }
@@ -99,6 +99,12 @@ pub(crate) fn choose_destination(
         complete(destination);
     });
     panel.beginSheetModalForWindow_completionHandler(window, &callback);
+}
+
+fn initial_directory(directory: Option<&Path>) -> Option<&str> {
+    directory
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .and_then(Path::to_str)
 }
 
 fn suggested_name(url: &Url) -> String {
@@ -264,6 +270,18 @@ fn fetch_with(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn initial_directory_uses_only_existing_absolute_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(initial_directory(Some(root.path())), root.path().to_str());
+        assert_eq!(initial_directory(Some(&file)), None);
+        assert_eq!(initial_directory(Some(&root.path().join("missing"))), None);
+        assert_eq!(initial_directory(Some(Path::new("."))), None);
+        assert_eq!(initial_directory(None), None);
+    }
 
     #[test]
     fn mid_transfer_cancellation_removes_staged_bytes() {
