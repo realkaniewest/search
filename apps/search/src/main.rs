@@ -417,6 +417,7 @@ enum FixtureSheetMode {
     Dismiss,
     Navigate,
     DeferredMedia,
+    DeferredMediaNavigate,
     DeferredGeolocation,
     DeferredGeolocationNavigate,
 }
@@ -429,6 +430,7 @@ impl FixtureSheetMode {
                 "1" => Self::Dismiss,
                 "navigation" => Self::Navigate,
                 "deferred-media" => Self::DeferredMedia,
+                "deferred-media-navigation" => Self::DeferredMediaNavigate,
                 "deferred-geolocation" => Self::DeferredGeolocation,
                 "deferred-geolocation-navigation" => Self::DeferredGeolocationNavigate,
                 _ => return None,
@@ -438,14 +440,17 @@ impl FixtureSheetMode {
 
     fn deferred_kind(self) -> Option<&'static str> {
         match self {
-            Self::DeferredMedia => Some("media"),
+            Self::DeferredMedia | Self::DeferredMediaNavigate => Some("media"),
             Self::DeferredGeolocation | Self::DeferredGeolocationNavigate => Some("geolocation"),
             _ => None,
         }
     }
 
     fn navigates(self) -> bool {
-        matches!(self, Self::Navigate | Self::DeferredGeolocationNavigate)
+        matches!(
+            self,
+            Self::Navigate | Self::DeferredMediaNavigate | Self::DeferredGeolocationNavigate
+        )
     }
 }
 

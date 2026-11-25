@@ -211,6 +211,7 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
     try:
         verify_origins = require_media_origin or require_geolocation_origin
         sheet_mode = os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET")
+        deferred_media = sheet_mode in ("deferred-media", "deferred-media-navigation")
         deferred_geolocation = sheet_mode in ("deferred-geolocation", "deferred-geolocation-navigation")
         Handler.frame_geolocation = require_geolocation_origin
         for attempt in range(3 if verify_origins else 2):
@@ -250,16 +251,16 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
             ):
                 print("FAIL: WebKit did not report the expected geolocation origin", file=sys.stderr)
                 return 1
-            if sheet_mode == "deferred-media" and run.stdout.count("SECURITY: deferred_media_denied") != 1:
+            if deferred_media and run.stdout.count("SECURITY: deferred_media_denied") != 1:
                 print("FAIL: expected one deferred media denial", file=sys.stderr)
                 return 1
             if deferred_geolocation and run.stdout.count("SECURITY: deferred_geolocation_denied") != 1:
                 print("FAIL: expected one deferred geolocation denial", file=sys.stderr)
                 return 1
-            if sheet_mode == "deferred-geolocation-navigation" and (
+            if sheet_mode in ("deferred-geolocation-navigation", "deferred-media-navigation") and (
                 "SECURITY: permission_sheet_dismissed=true navigation=true" not in run.stdout
             ):
-                print("FAIL: navigation did not cancel the pending geolocation sheet", file=sys.stderr)
+                print("FAIL: navigation did not cancel the pending permission sheet", file=sys.stderr)
                 return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
@@ -284,7 +285,7 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                 if (require_geolocation_origin or deferred_geolocation) and permission_results["geolocation"] != "denied":
                     print("FAIL: native geolocation denial did not reach the page", file=sys.stderr)
                     return 1
-                if sheet_mode == "deferred-media" and any(
+                if deferred_media and any(
                     permission_results[name] != "denied" for name in ("camera", "microphone")
                 ):
                     print("FAIL: native media denial did not reach the page", file=sys.stderr)
