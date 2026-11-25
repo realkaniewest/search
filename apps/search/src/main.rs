@@ -2331,6 +2331,20 @@ mod tests {
         let path = root.join("settings.json");
         save_preference(&legacy, &SearchEngine::Yandex).unwrap();
         assert_eq!(load_settings(&path, &legacy).engine, SearchEngine::Yandex);
+        fs::write(
+            &path,
+            br#"{"engine":"bing","palette":"paper","record_history":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_settings(&path, &legacy),
+            Settings {
+                engine: SearchEngine::Bing,
+                palette: Palette::Paper,
+                record_history: false,
+                ..Settings::default()
+            }
+        );
         let settings = Settings {
             engine: SearchEngine::Bing,
             private_engine: SearchEngine::DuckDuckGo,

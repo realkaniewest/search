@@ -716,17 +716,27 @@
     root.toggleAttribute('data-opaque', opaque_toolbar);
   }
   window.renderSettings = (values, privateMode, outcome) => {
+    const previous = appliedSettings;
+    const draft = outcome === 'conflict' ? readSettings() : null;
     appliedSettings = values;
     applyAppearance();
     window.restoreSearchEngine(privateMode ? values.private_engine : values.engine);
     if (outcome === null) return;
     savingSettings = false;
-    if (outcome !== 'failed') fillSettings(values);
+    if (draft) {
+      fillSettings(Object.fromEntries(Object.keys(defaults).map(name =>
+        [name, draft[name] === previous[name] ? values[name] : draft[name]]
+      )));
+    } else if (outcome === 'saved') {
+      fillSettings(values);
+    }
     settingsEdited();
     if (settingsShowing) (settingsSave.disabled ? settingsClose : settingsSave).focus();
     settingsStatus.textContent = {
       saved:'Настройки сохранены',
-      conflict:'Настройки изменились в другом окне. Загружены актуальные значения.',
+      conflict:settingsSave.disabled
+        ? 'Настройки обновлены из другого окна.'
+        : 'Настройки обновлены из другого окна. Проверьте свои правки и сохраните их.',
       failed:'Не удалось сохранить настройки. Попробуйте ещё раз.',
     }[outcome];
   };
