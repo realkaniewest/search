@@ -59,10 +59,17 @@ struct Snapshot: Codable {
         guard version == 1 else { throw ProbeError.unsupportedVersion }
         guard bookmarks.count <= 500, bookmarks.allSatisfy({ address, title in
             guard address.utf8.count <= 1024, title.utf8.count <= 512,
-                  let url = URL(string: address), url.absoluteString == address,
-                  url.scheme == "https", url.host?.isEmpty == false, url.user == nil, url.password == nil
+                  title == title.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+                  !address.contains("\\"),
+                  !address.unicodeScalars.contains(where: CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains),
+                  let url = URLComponents(string: address), url.string == address,
+                  url.scheme == "https", url.user == nil, url.password == nil,
+                  url.port == nil || url.port == 443, let host = url.host?.lowercased()
             else { return false }
-            return true
+            let domain = String(host.reversed().drop(while: { $0 == "." }).reversed())
+            return domain.contains(".") && !domain.hasSuffix(".localhost") && !domain.hasSuffix(".local")
+                && domain.split(separator: ".").last?.first?.isLetter == true
         }) else { throw ProbeError.invalidArguments }
     }
 

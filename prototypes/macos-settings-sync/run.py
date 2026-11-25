@@ -115,6 +115,10 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
         {**combined, "version": 2},
         {**combined, "privateHistory": ["https://example.test/private"]},
         {**combined, "bookmarks": {"https://user:password@example.test/": "Forbidden"}},
+        {**combined, "bookmarks": {"https://127.0.0.1/": "Loopback"}},
+        {**combined, "bookmarks": {"https://example.test:8443/": "Other port"}},
+        {**combined, "bookmarks": {"https://printer.local/": "Local host"}},
+        {**combined, "bookmarks": {"https://example.test/": "Two\nlines"}},
     )
     for document in invalid_documents:
         snapshot.write_text(json.dumps(document), encoding="utf-8")
