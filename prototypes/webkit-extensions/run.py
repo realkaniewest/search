@@ -1,5 +1,7 @@
 """Run the WebKit extension probe against a loopback-only fixture."""
 
+import argparse
+
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from subprocess import run
@@ -52,6 +54,9 @@ addEventListener('load', () => setTimeout(() => {
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--wry-binary", type=Path)
+    options = parser.parse_args()
     profile = str(uuid4())
     probe = ["swift", str(Path(__file__).with_name("probe.swift"))]
     with (
@@ -66,15 +71,19 @@ if __name__ == "__main__":
             thread.start()
         port = server.server_port
         try:
-            state = str(Path(temp) / "permissions.json")
-            arguments = [
-                *probe, f"http://localhost:{port}/", f"http://127.0.0.1:{port}/", profile,
-                f"http://localhost:{alternate.server_port}/",
-            ]
-            for phase in ("initial", "restart", "revoked"):
-                result = run([*arguments, phase, state], timeout=30, check=False)
-                if result.returncode:
-                    break
+            if options.wry_binary:
+                result = run([options.wry_binary.resolve(), f"http://localhost:{port}/",
+                              profile], timeout=30, check=False)
+            else:
+                state = str(Path(temp) / "permissions.json")
+                arguments = [
+                    *probe, f"http://localhost:{port}/", f"http://127.0.0.1:{port}/", profile,
+                    f"http://localhost:{alternate.server_port}/",
+                ]
+                for phase in ("initial", "restart", "revoked"):
+                    result = run([*arguments, phase, state], timeout=30, check=False)
+                    if result.returncode:
+                        break
         finally:
             for httpd, thread in zip(servers, threads):
                 httpd.shutdown()
