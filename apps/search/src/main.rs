@@ -1431,6 +1431,7 @@ fn main() {
     #[cfg(not(target_os = "macos"))]
     let fixture_permission_sheet_passed = false;
     let mut composer_visible = false;
+    let mut settings_refresh_pending = false;
     #[cfg(target_os = "macos")]
     let mut site_data_pending = false;
     #[cfg(target_os = "macos")]
@@ -1553,6 +1554,20 @@ fn main() {
                 }
             }
             event => event,
+        };
+        let refresh_settings = |settings: &mut Settings, tabs: &[Tab]| {
+            if let Some((path, legacy)) = settings_path.as_deref().zip(legacy_engine_path.as_deref())
+                && let Ok(updated) = read_settings(path, legacy)
+                && updated != *settings
+            {
+                if supports_page_zoom && updated.page_zoom != settings.page_zoom {
+                    for tab in tabs {
+                        updated.page_zoom.apply(tab);
+                    }
+                }
+                *settings = updated;
+                show_settings(&chrome, updated, private, None);
+            }
         };
         match command_from_start {
             #[cfg(target_os = "macos")]
@@ -1837,6 +1852,10 @@ fn main() {
                     let rect = if visible { full_window_bounds(&window) } else { bounds(&window).0 };
                     if chrome.set_bounds(rect).is_ok() {
                         composer_visible = visible;
+                        if !visible && settings_refresh_pending {
+                            settings_refresh_pending = false;
+                            refresh_settings(&mut settings, &tabs);
+                        }
                         #[cfg(target_os = "macos")]
                         shortcuts_enabled.set(chrome_ready && !visible);
                         let _ = tabs[active].view.set_visible(!visible);
@@ -2280,18 +2299,10 @@ fn main() {
             Event::WindowEvent {
                 event: WindowEvent::Focused(true),
                 ..
-            } if preview && !developer && chrome_ready && !composer_visible => {
-                if let Some((path, legacy)) = settings_path.as_deref().zip(legacy_engine_path.as_deref())
-                    && let Ok(updated) = read_settings(path, legacy)
-                    && updated != settings
-                {
-                    if supports_page_zoom && updated.page_zoom != settings.page_zoom {
-                        for tab in &tabs {
-                            updated.page_zoom.apply(tab);
-                        }
-                    }
-                    settings = updated;
-                    show_settings(&chrome, settings, private, None);
+            } if preview && !developer && chrome_ready => {
+                settings_refresh_pending = composer_visible;
+                if !composer_visible {
+                    refresh_settings(&mut settings, &tabs);
                 }
             }
             Event::WindowEvent {
