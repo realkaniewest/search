@@ -1584,13 +1584,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             Event::UserEvent(AppEvent::DownloadFinished(outcome)) => {
                 if let Some((_, worker)) = download_job.take() { let _ = worker.join(); }
-                use macos_download::Outcome;
-                notice = match outcome {
-                    Outcome::Saved => settings.notify_download_complete.then_some("Файл сохранён."),
-                    Outcome::Cancelled => Some("Загрузка отменена."),
-                    Outcome::DestinationExists => Some("Файл с таким именем уже есть. Выбери другое имя."),
-                    Outcome::Failed => Some("Не удалось скачать файл по этому адресу."),
-                };
+                notice = outcome.notice(settings.notify_download_complete);
                 let _ = chrome.evaluate_script("window.setDownloadActive(false)");
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
             }

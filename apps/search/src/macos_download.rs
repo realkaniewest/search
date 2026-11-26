@@ -26,6 +26,17 @@ pub(crate) enum Outcome {
     Failed,
 }
 
+impl Outcome {
+    pub(crate) fn notice(&self, notify_complete: bool) -> Option<&'static str> {
+        match self {
+            Self::Saved => notify_complete.then_some("Файл сохранён."),
+            Self::Cancelled => Some("Загрузка отменена."),
+            Self::DestinationExists => Some("Файл с таким именем уже есть. Выбери другое имя."),
+            Self::Failed => Some("Не удалось скачать файл по этому адресу."),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct DownloadControl(AtomicU8);
 
@@ -314,14 +325,19 @@ mod tests {
         std::fs::write(&path, b"existing").unwrap();
         let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
         staged.write_all(b"replacement").unwrap();
-        assert_eq!(finish(staged, &path), Outcome::DestinationExists);
+        let outcome = finish(staged, &path);
+        assert_eq!(outcome, Outcome::DestinationExists);
+        assert!(outcome.notice(false).is_some());
         assert_eq!(std::fs::read(&path).unwrap(), b"existing");
         assert_eq!(root.path().read_dir().unwrap().count(), 1);
 
         let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
         staged.write_all(b"completed").unwrap();
         let path = root.path().join("other.txt");
-        assert_eq!(finish(staged, &path), Outcome::Saved);
+        let outcome = finish(staged, &path);
+        assert_eq!(outcome, Outcome::Saved);
+        assert!(outcome.notice(true).is_some());
+        assert_eq!(outcome.notice(false), None);
         assert_eq!(std::fs::read(path).unwrap(), b"completed");
     }
 
@@ -332,7 +348,10 @@ mod tests {
         let path = root.path().join("file.txt");
         let control = DownloadControl::default();
         assert!(control.cancel());
-        assert_eq!(fetch(&url, &path, &control), Outcome::Cancelled);
+        let outcome = fetch(&url, &path, &control);
+        assert_eq!(outcome, Outcome::Cancelled);
+        assert!(outcome.notice(false).is_some());
+        assert!(Outcome::Failed.notice(false).is_some());
         assert_eq!(root.path().read_dir().unwrap().count(), 0);
     }
 }
