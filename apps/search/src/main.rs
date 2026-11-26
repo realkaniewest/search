@@ -296,13 +296,28 @@ impl Default for Settings {
     }
 }
 
+fn default_settings(legacy_engine: &Path) -> Settings {
+    Settings {
+        engine: load_search_engine(legacy_engine),
+        ..Settings::default()
+    }
+}
+
+fn read_settings(path: &Path, legacy_engine: &Path) -> io::Result<Settings> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => read_profile_data(path, 4096)
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or(io::ErrorKind::InvalidData.into()),
+        Ok(_) => Err(io::ErrorKind::InvalidData.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(default_settings(legacy_engine))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn load_settings(path: &Path, legacy_engine: &Path) -> Settings {
-    read_profile_data(path, 4096)
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_else(|| Settings {
-            engine: load_search_engine(legacy_engine),
-            ..Settings::default()
-        })
+    read_settings(path, legacy_engine).unwrap_or_else(|_| default_settings(legacy_engine))
 }
 
 fn update_settings(
@@ -311,7 +326,7 @@ fn update_settings(
     update: impl FnOnce(Settings) -> io::Result<Settings>,
 ) -> io::Result<Settings> {
     let _lock = lock_profile_file(path)?;
-    let updated = update(load_settings(path, legacy_engine))?;
+    let updated = update(read_settings(path, legacy_engine)?)?;
     save_preference(path, &updated)?;
     Ok(updated)
 }
@@ -2439,7 +2454,16 @@ mod tests {
             update_settings(&path, &legacy, |_| Err(io::ErrorKind::AlreadyExists.into()));
         assert_eq!(rejected.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(load_settings(&path, &legacy), settings);
-        fs::write(&path, vec![b' '; 4097]).unwrap();
+        for unreadable in [br#"{"future_field":true}"#.to_vec(), vec![b' '; 4097]] {
+            fs::write(&path, &unreadable).unwrap();
+            assert_eq!(
+                update_settings(&path, &legacy, |_| Ok(settings))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(fs::read(&path).unwrap(), unreadable);
+        }
         assert_eq!(load_settings(&path, &legacy).engine, SearchEngine::Yandex);
         fs::remove_dir_all(root).unwrap();
     }
