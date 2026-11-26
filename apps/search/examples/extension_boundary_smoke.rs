@@ -9,6 +9,7 @@ fn main() {
         rc::{Allocated, Retained},
         runtime::{AnyClass, AnyObject, Bool},
     };
+    use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSWindow};
     use objc2_foundation::{NSError, NSSet, NSString, NSURL, NSUUID};
     use objc2_web_kit::{WKWebViewConfiguration, WKWebsiteDataStore};
     use std::{
@@ -19,12 +20,15 @@ fn main() {
     use tao::{
         event::Event,
         event_loop::{ControlFlow, EventLoopBuilder},
+        platform::macos::WindowExtMacOS,
         window::WindowBuilder,
     };
     use wry::{PageLoadEvent, WebView, WebViewBuilder, WebViewBuilderExtMacos, WebViewExtMacOS};
 
     enum Message {
-        ReviewReady(bool),
+        ReviewReady(Option<String>),
+        DriveReview,
+        ReviewDecision(bool),
         Ready(usize),
         Checked(usize, bool),
         UnexpectedChromeIpc,
@@ -96,10 +100,10 @@ fn main() {
     let reviewed_extension = Rc::new(RefCell::new(None));
     let reviewed_for_callback = reviewed_extension.clone();
     let extension_context = RefCell::new(None);
-    let completion =
-        block2::RcBlock::new(move |extension: *mut AnyObject, _error: *mut NSError| {
-            let loaded = if extension.is_null() {
-                false
+    let completion = block2::RcBlock::new(
+        move |extension: *mut AnyObject, _error: *mut NSError| {
+            let review = if extension.is_null() {
+                None
             } else {
                 // The block is called on the main actor and WebKit owns the extension argument.
                 unsafe {
@@ -141,16 +145,27 @@ fn main() {
                         || read_hosts(&optional_patterns) != ["https://example.test/*"]
                     {
                         eprintln!("FAIL: unexpected extension metadata for review");
-                        let _ = completion_proxy.send_event(Message::ReviewReady(false));
+                        let _ = completion_proxy.send_event(Message::ReviewReady(None));
                         return;
                     }
                     *reviewed_for_callback.borrow_mut() = Retained::retain(extension);
-                    reviewed_for_callback.borrow().is_some()
+                    reviewed_for_callback.borrow().as_ref().map(|_| {
+                        format!(
+                            "{} {}\nОбязательные возможности: {}\nСайты: {}\nДополнительные возможности: {}\nДополнительные сайты: {}",
+                            name.as_deref().unwrap(), version.as_deref().unwrap(),
+                            permissions.iter().map(|value| value.to_string()).collect::<Vec<_>>().join(", "),
+                            read_hosts(&patterns).join(", "),
+                            optional_permissions.iter().map(|value| value.to_string()).collect::<Vec<_>>().join(", "),
+                            read_hosts(&optional_patterns).join(", "),
+                        )
+                    })
                 }
             };
-            let _ = completion_proxy.send_event(Message::ReviewReady(loaded));
-        });
+            let _ = completion_proxy.send_event(Message::ReviewReady(review));
+        },
+    );
     let mut start_loading = Some((resource_url, completion));
+    let mut review_alert = None;
     let mut views: Vec<WebView> = Vec::new();
     let mut seen = [false; 3];
     let mut step = Step::Initial;
@@ -171,19 +186,50 @@ fn main() {
                     };
                 }
             }
-            Event::UserEvent(Message::ReviewReady(true)) => {
-                // In the product this branch is reached by a review decision. The
-                // smoke driver supplies that decision without a human dialog.
-                let extension = reviewed_extension.borrow_mut().take().expect("reviewed package");
+            Event::UserEvent(Message::ReviewReady(Some(summary))) => {
+                let alert = NSAlert::new(mtm);
+                alert.setMessageText(&NSString::from_str("Установить расширение?"));
+                alert.setInformativeText(&NSString::from_str(&summary));
+                alert.addButtonWithTitle(&NSString::from_str("Отмена"));
+                alert.addButtonWithTitle(&NSString::from_str("Установить"));
+                let reply = proxy.clone();
+                let completion = block2::RcBlock::new(move |response| {
+                    let _ = reply.send_event(Message::ReviewDecision(response == NSAlertSecondButtonReturn));
+                });
+                // Tao owns this NSWindow for the lifetime of the event loop.
+                let parent = unsafe { &*window.ns_window().cast::<NSWindow>() };
+                alert.beginSheetModalForWindow_completionHandler(parent, Some(&completion));
+                review_alert = Some(alert);
+                let _ = proxy.send_event(Message::DriveReview);
+            }
+            Event::UserEvent(Message::DriveReview) => {
                 let contexts: Retained<NSSet<AnyObject>> = unsafe { msg_send![&*controller, extensionContexts] };
-                if !contexts.is_empty() {
-                    eprintln!("FAIL: extension ran before review was confirmed");
+                let parent = unsafe { &*window.ns_window().cast::<NSWindow>() };
+                let Some(sheet) = parent.attachedSheet().filter(|_| contexts.is_empty()) else {
+                    eprintln!("FAIL: expected a review sheet with no loaded extension");
                     *flow = ControlFlow::ExitWithCode(1);
+                    return;
+                };
+                let response = if cancel_review { NSAlertFirstButtonReturn } else { NSAlertSecondButtonReturn };
+                parent.endSheet_returnCode(&sheet, response);
+            }
+            Event::UserEvent(Message::ReviewDecision(approved)) => {
+                review_alert.take();
+                let extension = reviewed_extension.borrow_mut().take().expect("reviewed package");
+                if !approved {
+                    let contexts: Retained<NSSet<AnyObject>> = unsafe { msg_send![&*controller, extensionContexts] };
+                    if !cancel_review || !contexts.is_empty() {
+                        eprintln!("FAIL: unexpected extension review cancellation");
+                        *flow = ControlFlow::ExitWithCode(1);
+                        return;
+                    }
+                    println!("PASS: cancelling extension review left no loaded context");
+                    *flow = ControlFlow::ExitWithCode(0);
                     return;
                 }
                 if cancel_review {
-                    println!("PASS: cancelling extension review left no loaded context");
-                    *flow = ControlFlow::ExitWithCode(0);
+                    eprintln!("FAIL: extension review approved despite cancellation");
+                    *flow = ControlFlow::ExitWithCode(1);
                     return;
                 }
                 let context: Retained<AnyObject> = unsafe {
@@ -340,7 +386,7 @@ fn main() {
                 eprintln!("FAIL: unexpected message reached the trusted panel handler");
                 *flow = ControlFlow::ExitWithCode(1);
             }
-            Event::UserEvent(Message::ReviewReady(false)) => {
+            Event::UserEvent(Message::ReviewReady(None)) => {
                 eprintln!("FAIL: WebKit could not prepare the extension fixture for review");
                 *flow = ControlFlow::ExitWithCode(1);
             }
