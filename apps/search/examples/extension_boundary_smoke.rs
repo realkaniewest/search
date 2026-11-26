@@ -46,6 +46,7 @@ fn main() {
         RevokedAlternatePort,
         Regranted,
         Removed,
+        Reinstalled,
     }
 
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -97,6 +98,15 @@ fn main() {
     };
     let loading_class = class(c"WKWebExtension");
     let context_class = class(c"WKWebExtensionContext");
+    let create_context = move |extension: &AnyObject| -> Retained<AnyObject> {
+        unsafe {
+            let allocated: Allocated<AnyObject> = msg_send![context_class, alloc];
+            let context: Retained<AnyObject> = msg_send![allocated, initForExtension: extension];
+            let identifier = NSString::from_str("search-extension-boundary-fixture");
+            let _: () = msg_send![&*context, setUniqueIdentifier: &*identifier];
+            context
+        }
+    };
     let completion_proxy = proxy.clone();
     let cancel_review = std::env::var_os("SEARCH_EXTENSION_CANCEL_REVIEW").is_some();
     let reviewed_extension = Rc::new(RefCell::new(None));
@@ -171,6 +181,7 @@ fn main() {
     let mut views: Vec<WebView> = Vec::new();
     let mut seen = [false; 3];
     let mut step = Step::Initial;
+    let mut removed_extension = None;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop_.run(move |event, _, flow| {
         *flow = ControlFlow::WaitUntil(deadline);
@@ -234,10 +245,7 @@ fn main() {
                     *flow = ControlFlow::ExitWithCode(1);
                     return;
                 }
-                let context: Retained<AnyObject> = unsafe {
-                    let allocated: Allocated<AnyObject> = msg_send![context_class, alloc];
-                    msg_send![allocated, initForExtension: &*extension]
-                };
+                let context = create_context(&extension);
                 let mut error: *mut NSError = std::ptr::null_mut();
                 let loaded: Bool = unsafe {
                     msg_send![&*controller, loadExtensionContext: &*context, error: &mut error]
@@ -296,7 +304,7 @@ fn main() {
                     _ => address.origin().ascii_serialization(),
                 };
                 let marker = match index {
-                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled | Step::RevokedHost | Step::RevokedAlternatePort | Step::Removed) =>
+                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled | Step::RevokedHost | Step::RevokedAlternatePort | Step::Removed | Step::Reinstalled) =>
                         "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
                     0 => "document.documentElement.dataset.searchExtensionProbe === 'ran' && typeof window.ipc === 'undefined'",
                     1 => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc?.postMessage === 'function'",
@@ -394,11 +402,29 @@ fn main() {
                             *flow = ControlFlow::ExitWithCode(1);
                             return;
                         }
+                        let extension: Retained<AnyObject> = unsafe { msg_send![&*context, webExtension] };
+                        removed_extension = Some(extension);
                         step = Step::Removed;
                         &address
                     }
                     Step::Removed => {
-                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable, re-enable, revoke and remove");
+                        let extension = removed_extension.take().expect("removed package");
+                        let context = create_context(&extension);
+                        let mut error: *mut NSError = std::ptr::null_mut();
+                        let loaded: Bool = unsafe {
+                            msg_send![&*controller, loadExtensionContext: &*context, error: &mut error]
+                        };
+                        if !loaded.as_bool() {
+                            eprintln!("FAIL: reinstalling the removed extension failed");
+                            *flow = ControlFlow::ExitWithCode(1);
+                            return;
+                        }
+                        *extension_context.borrow_mut() = Some(context);
+                        step = Step::Reinstalled;
+                        &address
+                    }
+                    Step::Reinstalled => {
+                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable, re-enable, revoke, remove and reinstall without access");
                         *flow = ControlFlow::ExitWithCode(0);
                         return;
                     }
