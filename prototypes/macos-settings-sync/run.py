@@ -22,6 +22,18 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     first_revision = run([binary, "seed", snapshot], check=True, text=True,
                          stdout=PIPE, timeout=10).stdout.strip()
 
+    shared = work / "first-connection.json"
+    seeds = [Popen([binary, "seed", shared], stdout=PIPE, text=True) for _ in range(2)]
+    for seed in seeds:
+        seed.communicate(timeout=10)
+    assert sorted(seed.returncode for seed in seeds) == [0, 1]
+    assert json.loads(shared.read_bytes())["version"] == 1
+
+    initialized = snapshot.read_bytes()
+    existing = run([binary, "seed", snapshot], stdout=PIPE, text=True, timeout=10)
+    assert existing.returncode == 1 and snapshot.read_bytes() == initialized
+    assert not list(work.glob(".search-sync-*"))
+
     contenders = [
         Popen([binary, "palette", snapshot, first_revision, palette], stdout=PIPE, text=True)
         for palette in ("paper", "midnight")

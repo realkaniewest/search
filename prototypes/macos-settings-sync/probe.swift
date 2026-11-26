@@ -7,7 +7,7 @@ import Foundation
 
 enum ProbeError: Error {
     case unsupportedVersion, invalidArguments, staleRevision, coordinationFailed
-    case divergentField(String), invalidSnapshotFile, unknownSnapshotFields
+    case divergentField(String), invalidSnapshotFile, unknownSnapshotFields, snapshotAlreadyExists
 }
 
 enum Palette: String, Codable {
@@ -100,24 +100,43 @@ func importBookmarks() throws -> [String: String] {
     return bookmarks
 }
 
-func mutate(_ url: URL, change: @escaping (inout Snapshot) throws -> Void) throws {
+func coordinateWrite(_ url: URL, action: @escaping (URL) throws -> Void) throws {
     let coordinator = NSFileCoordinator(filePresenter: nil)
     var coordinationError: NSError?
     var result: Result<Void, Error>?
     coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { coordinatedURL in
-        result = Result {
-            var current = try Snapshot.read(coordinatedURL)
-            let before = current
-            try change(&current)
-            guard before.palette != current.palette || before.compactTabs != current.compactTabs ||
-                    before.pageZoom != current.pageZoom || before.bookmarks != current.bookmarks else { return }
-            current.revision = UUID()
-            try current.write(coordinatedURL)
-        }
+        result = Result { try action(coordinatedURL) }
     }
     if let coordinationError { throw coordinationError }
     guard let result else { throw ProbeError.coordinationFailed }
     try result.get()
+}
+
+func initialize(_ url: URL, snapshot: Snapshot) throws {
+    try coordinateWrite(url) { destination in
+        let staging = destination.deletingLastPathComponent()
+            .appendingPathComponent(".search-sync-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        try snapshot.write(staging)
+        // Publish the complete file without replacing an existing snapshot.
+        guard link(staging.path, destination.path) == 0 else {
+            let code = errno
+            if code == EEXIST { throw ProbeError.snapshotAlreadyExists }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+    }
+}
+
+func mutate(_ url: URL, change: @escaping (inout Snapshot) throws -> Void) throws {
+    try coordinateWrite(url) { coordinatedURL in
+        var current = try Snapshot.read(coordinatedURL)
+        let before = current
+        try change(&current)
+        guard before.palette != current.palette || before.compactTabs != current.compactTabs ||
+                before.pageZoom != current.pageZoom || before.bookmarks != current.bookmarks else { return }
+        current.revision = UUID()
+        try current.write(coordinatedURL)
+    }
 }
 
 func update(_ url: URL, expected: UUID, change: @escaping (inout Snapshot) -> Void) throws {
@@ -153,7 +172,7 @@ do {
     case "seed" where arguments.count == 2:
         let snapshot = Snapshot(version: 1, revision: UUID(), palette: .graphite,
                                 compactTabs: true, pageZoom: .standard, bookmarks: ["https://example.test/": "Fixture"])
-        try snapshot.write(url)
+        try initialize(url, snapshot: snapshot)
         print(snapshot.revision.uuidString)
     case "palette" where arguments.count == 4:
         guard let revision = UUID(uuidString: arguments[2]), let palette = Palette(rawValue: arguments[3])
