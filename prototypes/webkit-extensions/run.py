@@ -11,7 +11,7 @@ from subprocess import run
 from tempfile import TemporaryDirectory, mkdtemp
 from shutil import rmtree
 from threading import Thread
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 MAX_RESOURCE_BYTES = 16 * 1024 * 1024
@@ -115,6 +115,26 @@ else window.ipc.postMessage('extension-boundary-fixture');
     return staged
 
 
+def installed_packages(profile):
+    packages = {}
+    for entry in profile.iterdir():
+        try:
+            identifier = UUID(entry.name)
+        except ValueError:
+            continue
+        if str(identifier) == entry.name and stat.S_ISDIR(entry.lstat().st_mode):
+            packages[identifier] = entry
+    return packages
+
+
+def remove_package(profile, identifier):
+    package = installed_packages(profile)[identifier]
+    # Stop discovering the package before deleting its resources.
+    retired = package.rename(profile / f".removed-{uuid4()}")
+    rmtree(retired)
+
+
+
 class Fixture(BaseHTTPRequestHandler):
     alternate_port: int
 
@@ -174,18 +194,37 @@ if __name__ == "__main__":
         port = server.server_port
         try:
             if options.wry_binary:
+                profile_dir = Path(temp) / "extension-profile"
+                profile_dir.mkdir()
+                identifier = uuid4()
+                candidate = staged_fixture(Path(temp))
                 arguments = [options.wry_binary.resolve(), f"http://localhost:{port}/",
-                             profile, str(alternate.server_port), staged_fixture(Path(temp))]
+                             profile, str(alternate.server_port), candidate]
                 environment = os.environ.copy()
                 environment.pop("SEARCH_EXTENSION_CANCEL_REVIEW", None)
                 environment.pop("SEARCH_EXTENSION_VERIFY_RESTART", None)
                 result = run(arguments, env={**environment, "SEARCH_EXTENSION_CANCEL_REVIEW": "1"},
                              timeout=30, check=False)
+                assert not installed_packages(profile_dir)
                 if not result.returncode:
                     result = run(arguments, env=environment, timeout=30, check=False)
                 if not result.returncode:
+                    installed = candidate.rename(profile_dir / str(identifier))
+                    sibling_id = uuid4()
+                    sibling = profile_dir / str(sibling_id)
+                    sibling.mkdir()
+                    (sibling / "unchanged").write_bytes(b"other package")
+                    packages = installed_packages(profile_dir)
+                    assert packages[identifier] == installed
+                    arguments[-1] = packages[identifier]
                     result = run(arguments, env={**environment, "SEARCH_EXTENSION_VERIFY_RESTART": "1"},
                                  timeout=30, check=False)
+                    remove_package(profile_dir, identifier)
+                    assert installed_packages(profile_dir) == {sibling_id: sibling}
+                    assert not installed.exists()
+                    assert (sibling / "unchanged").read_bytes() == b"other package"
+                    if not result.returncode:
+                        print("PASS: a new process loaded the stored package; removal preserved its neighbor")
             else:
                 state = str(Path(temp) / "permissions.json")
                 arguments = [
