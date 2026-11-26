@@ -127,8 +127,32 @@ def installed_packages(profile):
     return packages
 
 
+def set_package_enabled(profile, identifier, enabled):
+    if identifier not in installed_packages(profile):
+        raise ValueError("extension package is not installed")
+    state = profile / f".enabled-{identifier}"
+    if enabled:
+        with state.open("xb"):
+            pass
+    else:
+        state.unlink(missing_ok=True)
+
+
+def enabled_packages(profile):
+    enabled = {}
+    for identifier, package in installed_packages(profile).items():
+        try:
+            marker = (profile / f".enabled-{identifier}").lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(marker.st_mode) and marker.st_size == 0:
+            enabled[identifier] = package
+    return enabled
+
+
 def remove_package(profile, identifier):
     package = installed_packages(profile)[identifier]
+    set_package_enabled(profile, identifier, False)
     # Stop discovering the package before deleting its resources.
     retired = package.rename(profile / f".removed-{uuid4()}")
     rmtree(retired)
@@ -216,12 +240,21 @@ if __name__ == "__main__":
                     (sibling / "unchanged").write_bytes(b"other package")
                     packages = installed_packages(profile_dir)
                     assert packages[identifier] == installed
-                    arguments[-1] = packages[identifier]
+                    assert not enabled_packages(profile_dir)
+                    set_package_enabled(profile_dir, identifier, True)
+                    assert enabled_packages(profile_dir) == {identifier: installed}
+                    set_package_enabled(profile_dir, identifier, False)
+                    assert installed_packages(profile_dir)[identifier] == installed
+                    assert not enabled_packages(profile_dir)
+                    set_package_enabled(profile_dir, identifier, True)
+                    arguments[-1] = enabled_packages(profile_dir)[identifier]
                     result = run(arguments, env={**environment, "SEARCH_EXTENSION_VERIFY_RESTART": "1"},
                                  timeout=30, check=False)
                     remove_package(profile_dir, identifier)
                     assert installed_packages(profile_dir) == {sibling_id: sibling}
                     assert not installed.exists()
+                    assert not enabled_packages(profile_dir)
+                    assert not (profile_dir / f".enabled-{identifier}").exists()
                     assert (sibling / "unchanged").read_bytes() == b"other package"
                     if not result.returncode:
                         print("PASS: a new process loaded the stored package; removal preserved its neighbor")
