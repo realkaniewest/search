@@ -14,13 +14,14 @@ from threading import Thread
 from uuid import uuid4
 
 
+MAX_RESOURCE_BYTES = 16 * 1024 * 1024
 CHROME = Path(__file__).resolve().parents[2] / "apps/search/src/chrome.html"
 
 
 def stage_extension(source, parent):
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     remaining_entries = 512
-    remaining_bytes = 16 * 1024 * 1024
+    remaining_bytes = MAX_RESOURCE_BYTES
 
     def copy_directory(directory, entries, destination, depth):
         nonlocal remaining_entries, remaining_bytes
@@ -83,17 +84,31 @@ if (typeof window.ipc === 'undefined')
   document.documentElement.dataset.searchExtensionProbe = 'ran';
 else window.ipc.postMessage('extension-boundary-fixture');
 """, encoding="utf-8")
-    link = source / "unapproved.js"
+    def check_rejected(resource, expected_error):
+        try:
+            stage_extension(source, parent)
+        except expected_error:
+            assert not list(parent.glob("staged-*")), "staging directory leaked after rejection"
+        else:
+            raise AssertionError(f"staging accepted {resource.name}")
+        finally:
+            resource.unlink()
+
     outside = parent / "outside.js"
     outside.write_text("outside the selected directory", encoding="utf-8")
+    link = source / "unapproved.js"
     link.symlink_to(outside)
-    try:
-        stage_extension(source, parent)
-    except OSError:
-        pass
-    else:
-        raise AssertionError("staging accepted a symbolic link")
-    link.unlink()
+    check_rejected(link, OSError)
+
+    pipe = source / "named-pipe"
+    os.mkfifo(pipe)
+    check_rejected(pipe, ValueError)
+
+    oversized = source / "oversized"
+    with oversized.open("xb") as resource:
+        resource.truncate(MAX_RESOURCE_BYTES + 1)
+    check_rejected(oversized, ValueError)
+
     staged = stage_extension(source, parent)
     (source / "manifest.json").write_text("{}", encoding="utf-8")
     script.write_text("throw new Error('source changed');", encoding="utf-8")
