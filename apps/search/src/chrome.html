@@ -336,6 +336,7 @@
       </fieldset>
       <fieldset><legend>Загрузки</legend>
         <label class="setting-row"><span>Начальная папка<small>Папку можно изменить в окне сохранения. Если выбранная папка недоступна, macOS предложит другую.</small></span><select name="download_folder"><option value="recent">Последняя использованная</option><option value="downloads">Загрузки</option><option value="desktop">Рабочий стол</option><option value="documents">Документы</option></select></label>
+        <label class="setting-row"><span>Показывать сообщение после скачивания</span><input type="checkbox" name="notify_download_complete"></label>
       </fieldset>
       <fieldset><legend>Запуск и история</legend>
         <label class="setting-row"><span>Восстанавливать вкладки<small>Если выключено, следующий запуск начнётся с новой вкладки.</small></span><input type="checkbox" name="restore_tabs"></label>
@@ -693,7 +694,7 @@
   const settingsStatus = document.getElementById('settings-status');
   const systemDark = matchMedia('(prefers-color-scheme: dark)');
   const defaults = {engine:'google', private_engine:'google', palette:'graphite', compact_tabs:false,
-    reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent'};
+    reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent', notify_download_complete:true};
   let appliedSettings = defaults;
   let settingsShowing = false;
   let savingSettings = false;

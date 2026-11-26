@@ -86,7 +86,7 @@ class ResizeObserver {
   observe() {}
 }
 const controls = new Map([
-  ['engine', {value:'google'}], ['private_engine', {value:'google'}], ['palette', {value:'graphite'}], ['page_zoom', {value:'100'}], ['download_folder', {value:'recent'}],
+  ['engine', {value:'google'}], ['private_engine', {value:'google'}], ['palette', {value:'graphite'}], ['page_zoom', {value:'100'}], ['download_folder', {value:'recent'}], ['notify_download_complete', {type:'checkbox', checked:true}],
   ...['compact_tabs', 'reduced_motion', 'opaque_toolbar', 'restore_tabs', 'record_history'].map(name => [name, {type:'checkbox'}]),
 ]);
 elements.get('settings-form').elements = { namedItem: name => controls.get(name) };
@@ -94,7 +94,7 @@ elements.get('settings-form').querySelectorAll = () => [];
 runInNewContext(script, { document, window, Number, JSON, TextEncoder, ResizeObserver,
   matchMedia: () => ({matches: false}) });
 const savedSettings = {engine:'google', private_engine:'duckduckgo', palette:'system', compact_tabs:true,
-  reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent'};
+  reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent', notify_download_complete:true};
 window.renderSettings(savedSettings, true, null);
 assert.equal(document.documentElement.dataset.palette, 'paper');
 assert.equal(document.documentElement.getAttribute('data-compact'), '');
@@ -115,9 +115,10 @@ assert.equal(document.activeElement, elements.get('settings-reset'), 'Shift-Tab 
 controls.get('record_history').checked = false;
 controls.get('page_zoom').value = '150';
 controls.get('download_folder').value = 'downloads';
+controls.get('notify_download_complete').checked = false;
 elements.get('settings-form').dispatch('change');
 elements.get('settings-form').dispatch('submit');
-assert.deepEqual(messages.pop(), {type:'save-settings', settings:{...savedSettings, record_history:false, page_zoom:'150', download_folder:'downloads'}});
+assert.deepEqual(messages.pop(), {type:'save-settings', settings:{...savedSettings, record_history:false, page_zoom:'150', download_folder:'downloads', notify_download_complete:false}});
 window.renderSettings(savedSettings, false, 'invalid-file');
 assert.match(elements.get('settings-status').textContent, /Исходный файл сохранён/);
 assert.equal(controls.get('page_zoom').value, '150');
@@ -133,7 +134,7 @@ assert.equal(controls.get('palette').value, 'midnight');
 assert.equal(controls.get('page_zoom').value, '150');
 assert.equal(messages.length, 0);
 elements.get('settings-form').dispatch('submit');
-const mergedSettings = {...externalSettings, record_history:false, page_zoom:'150', download_folder:'downloads'};
+const mergedSettings = {...externalSettings, record_history:false, page_zoom:'150', download_folder:'downloads', notify_download_complete:false};
 assert.deepEqual(messages.pop(), {type:'save-settings', settings:mergedSettings});
 window.renderSettings(mergedSettings, false, 'saved');
 assert.equal(elements.get('settings-save').disabled, true);

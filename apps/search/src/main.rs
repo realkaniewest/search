@@ -277,6 +277,7 @@ struct Settings {
     record_history: bool,
     page_zoom: PageZoom,
     download_folder: DownloadFolder,
+    notify_download_complete: bool,
 }
 
 impl Default for Settings {
@@ -292,6 +293,7 @@ impl Default for Settings {
             record_history: true,
             page_zoom: PageZoom::Standard,
             download_folder: DownloadFolder::Recent,
+            notify_download_complete: true,
         }
     }
 }
@@ -1583,12 +1585,12 @@ fn main() {
             Event::UserEvent(AppEvent::DownloadFinished(outcome)) => {
                 if let Some((_, worker)) = download_job.take() { let _ = worker.join(); }
                 use macos_download::Outcome;
-                notice = Some(match outcome {
-                    Outcome::Saved => "Файл сохранён.",
-                    Outcome::Cancelled => "Загрузка отменена.",
-                    Outcome::DestinationExists => "Файл с таким именем уже есть. Выбери другое имя.",
-                    Outcome::Failed => "Не удалось скачать файл по этому адресу.",
-                });
+                notice = match outcome {
+                    Outcome::Saved => settings.notify_download_complete.then_some("Файл сохранён."),
+                    Outcome::Cancelled => Some("Загрузка отменена."),
+                    Outcome::DestinationExists => Some("Файл с таким именем уже есть. Выбери другое имя."),
+                    Outcome::Failed => Some("Не удалось скачать файл по этому адресу."),
+                };
                 let _ = chrome.evaluate_script("window.setDownloadActive(false)");
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
             }
@@ -2443,6 +2445,7 @@ mod tests {
             record_history: false,
             page_zoom: PageZoom::Large,
             download_folder: DownloadFolder::Downloads,
+            notify_download_complete: false,
         };
         fs::write(
             root.join(format!(".settings.json-{}.tmp", process::id())),
