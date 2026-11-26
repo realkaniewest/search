@@ -128,8 +128,11 @@ enum Command {
     PrivateWindow,
     #[serde(rename = "bookmarks-list")]
     BookmarksList,
-    #[serde(rename = "bookmark-toggle")]
-    BookmarkToggle,
+    #[serde(rename = "bookmark-set")]
+    BookmarkSet {
+        url: String,
+        saved: bool,
+    },
     #[serde(rename = "bookmark-remove")]
     BookmarkRemove {
         value: String,
@@ -2072,17 +2075,25 @@ fn main() {
                             notice = Some("Не удалось открыть временное окно.");
                         }
                     }
-                    Command::BookmarksList | Command::BookmarkToggle | Command::BookmarkRemove { .. } if preview && !private => {
+                    Command::BookmarksList | Command::BookmarkSet { .. } | Command::BookmarkRemove { .. } if preview && !private => {
                         let result = bookmarks_path.as_deref().ok_or(io::ErrorKind::NotFound.into())
                             .and_then(|path| update_bookmarks(path, |updated| match command {
-                                Command::BookmarkToggle => {
+                                Command::BookmarkSet { url, saved } => {
                                     let current = &tabs[active];
-                                    let result = preview_url(&current.display_url)
-                                        .and_then(|(_, url)| updated.toggle(&url, &current.title));
-                                    if result.is_none() {
-                                        notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                                    let Some((_, current_url)) = preview_url(&current.display_url)
+                                        .filter(|(_, current_url)| current_url.as_str() == url)
+                                    else {
+                                        return false;
+                                    };
+                                    if saved && !updated.contains(&current_url) {
+                                        let added = updated.add(&current_url, &current.title);
+                                        if !added {
+                                            notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                                        }
+                                        added
+                                    } else {
+                                        !saved && updated.remove(&current_url)
                                     }
-                                    result.is_some()
                                 }
                                 Command::BookmarkRemove { value } => preview_url(&value)
                                     .is_some_and(|(_, url)| updated.remove(&url)),

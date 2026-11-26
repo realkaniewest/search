@@ -88,15 +88,6 @@ impl Bookmarks {
         self.entries.retain(|entry| entry.url != url.as_str());
         self.entries.len() != count
     }
-
-    /// Returns the new saved state, or None when a bookmark cannot be added.
-    pub(crate) fn toggle(&mut self, url: &Url, title: &str) -> Option<bool> {
-        if self.remove(url) {
-            Some(false)
-        } else {
-            self.add(url, title).then_some(true)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -104,17 +95,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn toggles_canonical_url_and_round_trips() {
+    fn stores_canonical_url_and_round_trips() {
         let mut bookmarks = Bookmarks::default();
         let url = Url::parse("https://EXAMPLE.org:443/path").unwrap();
-        assert_eq!(bookmarks.toggle(&url, "Page"), Some(true));
+        assert!(bookmarks.add(&url, "Page"));
         assert!(bookmarks.contains(&url));
         assert!(!bookmarks.add(&url, "Duplicate"));
         let bytes = serde_json::to_vec(&bookmarks).unwrap();
         let mut restored = Bookmarks::from_json(&bytes).unwrap();
         assert_eq!(restored.entries()[0].url, "https://example.org/path");
         assert_eq!(restored.entries()[0].title, "Page");
-        assert_eq!(restored.toggle(&url, "Page"), Some(false));
+        assert!(restored.remove(&url));
         assert!(!restored.contains(&url));
     }
 
@@ -126,7 +117,7 @@ mod tests {
             assert!(bookmarks.add(&url, ""));
         }
         let extra = Url::parse("https://example.org/extra").unwrap();
-        assert_eq!(bookmarks.toggle(&extra, ""), None);
+        assert!(!bookmarks.add(&extra, ""));
         assert_eq!(bookmarks.entries().len(), MAX_ENTRIES);
         assert!(bookmarks.contains(&Url::parse("https://example.org/0").unwrap()));
     }
@@ -135,14 +126,14 @@ mod tests {
     fn rejects_unsupported_urls_and_bad_data() {
         let mut bookmarks = Bookmarks::default();
         for raw in ["http://example.org/", "https://user:secret@example.org/"] {
-            assert_eq!(bookmarks.toggle(&Url::parse(raw).unwrap(), ""), None);
+            assert!(!bookmarks.add(&Url::parse(raw).unwrap(), ""));
         }
         let oversized = Url::parse(&format!(
             "https://example.org/{}",
             "x".repeat(MAX_URL_BYTES)
         ))
         .unwrap();
-        assert_eq!(bookmarks.toggle(&oversized, ""), None);
+        assert!(!bookmarks.add(&oversized, ""));
 
         let url = Url::parse("https://example.org/").unwrap();
         assert!(bookmarks.add(&url, &"Ж".repeat(MAX_TITLE_BYTES)));

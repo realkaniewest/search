@@ -494,7 +494,10 @@
     bookmarkToggle.setAttribute('aria-pressed', String(saved));
   }
   bookmarkToggle.onclick = () => {
-    if (!bookmarkToggle.disabled) send({type:'bookmark-toggle'});
+    const url = window.searchState.tabs[window.searchState.active]?.url;
+    if (!bookmarkToggle.disabled && url) {
+      send({type:'bookmark-set', url, saved:!bookmarkEntries.some(entry => entry.url === url)});
+    }
   };
   function dismissHistory() {
     historyShowing = false;

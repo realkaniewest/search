@@ -442,9 +442,11 @@ assert.deepEqual(messages.pop(), {type: 'composer', visible: false});
 
 window.renderSearch({active: 0, tabs: [{id: 902, label: 'Example Domain', url: 'https://example.org/'}]});
 elements.get('bookmark-toggle').dispatch('click');
-assert.deepEqual(messages.pop(), {type: 'bookmark-toggle'});
+assert.deepEqual(messages.pop(), {type: 'bookmark-set', url: 'https://example.org/', saved: true});
 window.renderBookmarks([{url: 'https://example.org/', title: 'Example Domain'}]);
 assert.equal(elements.get('bookmark-toggle').getAttribute('aria-pressed'), 'true');
+elements.get('bookmark-toggle').dispatch('click');
+assert.deepEqual(messages.pop(), {type: 'bookmark-set', url: 'https://example.org/', saved: false});
 elements.get('bookmarks-open').dispatch('click');
 assert.deepEqual(messages.splice(-2), [{type: 'composer', visible: true}, {type: 'bookmarks-list'}]);
 assert.equal(elements.get('history-clear').hidden, true);
