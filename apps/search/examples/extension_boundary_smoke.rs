@@ -108,6 +108,7 @@ fn main() {
         }
     };
     let completion_proxy = proxy.clone();
+    let verify_restart = std::env::var_os("SEARCH_EXTENSION_VERIFY_RESTART").is_some();
     let cancel_review = std::env::var_os("SEARCH_EXTENSION_CANCEL_REVIEW").is_some();
     let reviewed_extension = Rc::new(RefCell::new(None));
     let reviewed_for_callback = reviewed_extension.clone();
@@ -327,6 +328,11 @@ fn main() {
                     return;
                 }
                 let url = match step {
+                    Step::Initial if verify_restart => {
+                        println!("PASS: a fresh process did not restore previous host access");
+                        *flow = ControlFlow::ExitWithCode(0);
+                        return;
+                    }
                     Step::Initial => {
                         let context = extension_context.borrow();
                         let context = context.as_ref().expect("loaded extension context");

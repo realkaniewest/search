@@ -178,10 +178,14 @@ if __name__ == "__main__":
                              profile, str(alternate.server_port), staged_fixture(Path(temp))]
                 environment = os.environ.copy()
                 environment.pop("SEARCH_EXTENSION_CANCEL_REVIEW", None)
+                environment.pop("SEARCH_EXTENSION_VERIFY_RESTART", None)
                 result = run(arguments, env={**environment, "SEARCH_EXTENSION_CANCEL_REVIEW": "1"},
                              timeout=30, check=False)
                 if not result.returncode:
                     result = run(arguments, env=environment, timeout=30, check=False)
+                if not result.returncode:
+                    result = run(arguments, env={**environment, "SEARCH_EXTENSION_VERIFY_RESTART": "1"},
+                                 timeout=30, check=False)
             else:
                 state = str(Path(temp) / "permissions.json")
                 arguments = [
