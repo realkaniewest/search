@@ -2180,6 +2180,7 @@ fn main() {
                                 }
                                 "conflict"
                             }
+                            Err(error) if error.kind() == io::ErrorKind::InvalidData => "invalid-file",
                             Err(_) => "failed",
                         };
                         if supports_page_zoom && settings.page_zoom != previous_zoom {
