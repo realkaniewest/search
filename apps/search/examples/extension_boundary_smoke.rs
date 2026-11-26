@@ -66,6 +66,8 @@ fn main() {
         r#"{
         "manifest_version":3,"name":"Search fixture","version":"1.0",
         "permissions":["storage"],
+        "optional_permissions":["tabs"],
+        "optional_host_permissions":["https://example.test/*"],
         "content_scripts":[{"matches":["http://localhost/*","http://127.0.0.1/*"],"js":["marker.js"]}]
     }"#,
     )
@@ -132,14 +134,21 @@ fn main() {
                         msg_send![&*extension, requestedPermissions];
                     let patterns: Retained<NSSet<AnyObject>> =
                         msg_send![&*extension, allRequestedMatchPatterns];
-                    let mut hosts: Vec<_> = patterns
-                        .iter()
-                        .map(|pattern| {
-                            let pattern: Retained<NSString> = msg_send![&*pattern, string];
-                            pattern.to_string()
-                        })
-                        .collect();
-                    hosts.sort_unstable();
+                    let optional_permissions: Retained<NSSet<NSString>> =
+                        msg_send![&*extension, optionalPermissions];
+                    let optional_patterns: Retained<NSSet<AnyObject>> =
+                        msg_send![&*extension, optionalPermissionMatchPatterns];
+                    let read_hosts = |patterns: &NSSet<AnyObject>| {
+                        let mut hosts: Vec<_> = patterns
+                            .iter()
+                            .map(|pattern| {
+                                let pattern: Retained<NSString> = msg_send![&*pattern, string];
+                                pattern.to_string()
+                            })
+                            .collect();
+                        hosts.sort_unstable();
+                        hosts
+                    };
                     if name.as_deref().map(ToString::to_string).as_deref() != Some("Search fixture")
                         || version.as_deref().map(ToString::to_string).as_deref() != Some("1.0")
                         || permissions
@@ -147,7 +156,13 @@ fn main() {
                             .map(|value| value.to_string())
                             .collect::<Vec<_>>()
                             != ["storage"]
-                        || hosts != ["http://127.0.0.1/*", "http://localhost/*"]
+                        || read_hosts(&patterns) != ["http://127.0.0.1/*", "http://localhost/*"]
+                        || optional_permissions
+                            .iter()
+                            .map(|value| value.to_string())
+                            .collect::<Vec<_>>()
+                            != ["tabs"]
+                        || read_hosts(&optional_patterns) != ["https://example.test/*"]
                     {
                         eprintln!("FAIL: unexpected extension metadata for review");
                         let _ = completion_proxy.send_event(Message::ExtensionReady(false));
