@@ -100,6 +100,20 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     assert rejected.returncode == 1
 
     assert merged["bookmarks"] == {**combined["bookmarks"], third_address: "Third"}
+    profile_snapshot = work / "profile-settings.json"
+    profile_snapshot.write_bytes(saved)
+    importer = [binary, "import-settings", profile_snapshot, merged["revision"]]
+    invalid_settings = json.dumps({**local_settings, "page_zoom": "137"}).encode()
+    rejected = run(importer, input=invalid_settings, stdout=PIPE, timeout=10)
+    assert rejected.returncode == 1 and profile_snapshot.read_bytes() == saved
+    run(importer, input=local_bytes, check=True, timeout=10)
+    imported_bytes = profile_snapshot.read_bytes()
+    imported = json.loads(imported_bytes)
+    assert imported.pop("revision") != merged["revision"]
+    assert imported == {**{key: value for key, value in merged.items() if key != "revision"},
+                        "palette": "graphite", "compactTabs": False, "pageZoom": "110"}
+    stale = run(importer, input=local_bytes, stdout=PIPE, timeout=10)
+    assert stale.returncode == 3 and profile_snapshot.read_bytes() == imported_bytes
     exported = run([binary, "export-bookmarks", snapshot], check=True, stdout=PIPE, timeout=10).stdout
     assert json.loads(exported) == [
         {"url": url, "title": title} for url, title in sorted(merged["bookmarks"].items())

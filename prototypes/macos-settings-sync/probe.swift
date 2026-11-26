@@ -19,6 +19,18 @@ enum PageZoom: String, Codable {
     case large = "125", extraLarge = "150", double = "200"
 }
 
+struct ProfileAppearance: Decodable {
+    let palette: Palette
+    let compactTabs: Bool
+    let pageZoom: PageZoom?
+
+    enum CodingKeys: String, CodingKey {
+        case palette
+        case compactTabs = "compact_tabs"
+        case pageZoom = "page_zoom"
+    }
+}
+
 struct Snapshot: Codable {
     let version: Int
     var revision: UUID
@@ -182,6 +194,17 @@ do {
         guard let revision = UUID(uuidString: arguments[2]) else { throw ProbeError.invalidArguments }
         let bookmarks = try importBookmarks()
         try update(url, expected: revision) { $0.bookmarks = bookmarks }
+    case "import-settings" where arguments.count == 3:
+        guard let revision = UUID(uuidString: arguments[2]) else { throw ProbeError.invalidArguments }
+        let bytes = try readBounded(.standardInput, maximumBytes: 4096)
+        let settings = try JSONDecoder().decode(ProfileAppearance.self, from: bytes)
+        try update(url, expected: revision) {
+            $0.palette = settings.palette
+            $0.compactTabs = settings.compactTabs
+            if let zoom = settings.pageZoom {
+                $0.pageZoom = zoom
+            }
+        }
     case "apply-settings" where arguments.count == 2:
         let snapshot = try Snapshot.read(url)
         let bytes = try readBounded(.standardInput, maximumBytes: 4096)
