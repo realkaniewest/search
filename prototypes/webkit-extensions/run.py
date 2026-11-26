@@ -1,16 +1,103 @@
 """Run the WebKit extension probe against a loopback-only fixture."""
 
 import argparse
+import json
+import os
+import stat
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from subprocess import run
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, mkdtemp
+from shutil import rmtree
 from threading import Thread
 from uuid import uuid4
 
 
 CHROME = Path(__file__).resolve().parents[2] / "apps/search/src/chrome.html"
+
+
+def stage_extension(source, parent):
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    remaining_entries = 512
+    remaining_bytes = 16 * 1024 * 1024
+
+    def copy_directory(directory, entries, destination, depth):
+        nonlocal remaining_entries, remaining_bytes
+        if depth > 12:
+            raise ValueError("extension directory is too deep")
+        for name in entries:
+            remaining_entries -= 1
+            if remaining_entries < 0:
+                raise ValueError("extension has too many resources")
+            descriptor = os.open(name.name, flags, dir_fd=directory)
+            try:
+                mode = os.fstat(descriptor).st_mode
+                target = destination / name.name
+                if stat.S_ISDIR(mode):
+                    target.mkdir()
+                    scan(descriptor, target, depth + 1)
+                elif stat.S_ISREG(mode):
+                    with os.fdopen(os.dup(descriptor), "rb") as resource, target.open("xb") as output:
+                        while chunk := resource.read(min(65536, remaining_bytes + 1)):
+                            remaining_bytes -= len(chunk)
+                            if remaining_bytes < 0:
+                                raise ValueError("extension resources are too large")
+                            output.write(chunk)
+                else:
+                    raise ValueError("extension resource must be a regular file")
+            finally:
+                os.close(descriptor)
+
+    def scan(descriptor, destination, depth):
+        with os.scandir(descriptor) as entries:
+            copy_directory(descriptor, entries, destination, depth)
+
+    staging = Path(mkdtemp(prefix="staged-", dir=parent))
+    try:
+        directory = os.open(source, flags | os.O_DIRECTORY)
+        try:
+            scan(directory, staging, 0)
+        finally:
+            os.close(directory)
+        return staging
+    except BaseException:
+        rmtree(staging)
+        raise
+
+
+def staged_fixture(parent):
+    source = parent / "chosen-extension"
+    source.mkdir()
+    (source / "manifest.json").write_text(json.dumps({
+        "manifest_version": 3, "name": "Search fixture", "version": "1.0",
+        "permissions": ["storage"], "optional_permissions": ["tabs"],
+        "optional_host_permissions": ["https://example.test/*"],
+        "content_scripts": [{
+            "matches": ["http://localhost/*", "http://127.0.0.1/*"], "js": ["marker.js"],
+        }],
+    }), encoding="utf-8")
+    script = source / "marker.js"
+    script.write_text("""
+if (typeof window.ipc === 'undefined')
+  document.documentElement.dataset.searchExtensionProbe = 'ran';
+else window.ipc.postMessage('extension-boundary-fixture');
+""", encoding="utf-8")
+    link = source / "unapproved.js"
+    outside = parent / "outside.js"
+    outside.write_text("outside the selected directory", encoding="utf-8")
+    link.symlink_to(outside)
+    try:
+        stage_extension(source, parent)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("staging accepted a symbolic link")
+    link.unlink()
+    staged = stage_extension(source, parent)
+    (source / "manifest.json").write_text("{}", encoding="utf-8")
+    script.write_text("throw new Error('source changed');", encoding="utf-8")
+    return staged
 
 
 class Fixture(BaseHTTPRequestHandler):
@@ -73,7 +160,7 @@ if __name__ == "__main__":
         try:
             if options.wry_binary:
                 result = run([options.wry_binary.resolve(), f"http://localhost:{port}/",
-                              profile, str(alternate.server_port)], timeout=30, check=False)
+                              profile, str(alternate.server_port), staged_fixture(Path(temp))], timeout=30, check=False)
             else:
                 state = str(Path(temp) / "permissions.json")
                 arguments = [

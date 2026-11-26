@@ -45,8 +45,8 @@ fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
     assert_eq!(
         args.len(),
-        3,
-        "expected loopback URL, profile UUID and alternate port"
+        4,
+        "expected loopback URL, profile UUID, alternate port and staged fixture"
     );
     let address = url::Url::parse(&args[0]).expect("valid fixture URL");
     assert_eq!(address.scheme(), "http");
@@ -60,28 +60,6 @@ fn main() {
         .set_port(Some(args[2].parse().expect("valid alternate port")))
         .expect("valid HTTP port");
     assert_ne!(alternate_port.port(), address.port());
-    let fixture = tempfile::tempdir().expect("create extension fixture directory");
-    std::fs::write(
-        fixture.path().join("manifest.json"),
-        r#"{
-        "manifest_version":3,"name":"Search fixture","version":"1.0",
-        "permissions":["storage"],
-        "optional_permissions":["tabs"],
-        "optional_host_permissions":["https://example.test/*"],
-        "content_scripts":[{"matches":["http://localhost/*","http://127.0.0.1/*"],"js":["marker.js"]}]
-    }"#,
-    )
-    .expect("write extension manifest");
-    std::fs::write(
-        fixture.path().join("marker.js"),
-        "
-        if (typeof window.ipc === 'undefined')
-          document.documentElement.dataset.searchExtensionProbe = 'ran';
-        else window.ipc.postMessage('extension-boundary-fixture');
-    ",
-    )
-    .expect("write extension script");
-    let mut fixture = Some(fixture);
     let mtm = MainThreadMarker::new().expect("main thread");
     let loop_ = EventLoopBuilder::<Message>::with_user_event().build();
     let window = WindowBuilder::new()
@@ -108,10 +86,7 @@ fn main() {
         config.setWebsiteDataStore(&store);
         let _: () = msg_send![&*config, setWebExtensionController: &*controller];
         let fixture_url = NSURL::URLWithString(&NSString::from_str(address.as_str())).unwrap();
-        let resource_url = NSURL::fileURLWithPath_isDirectory(
-            &NSString::from_str(fixture.as_ref().unwrap().path().to_str().unwrap()),
-            true,
-        );
+        let resource_url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(&args[3]), true);
         (controller, config, fixture_url, resource_url)
     };
     let loading_class = class(c"WKWebExtension");
@@ -188,10 +163,6 @@ fn main() {
     let mut step = Step::Initial;
     let deadline = Instant::now() + Duration::from_secs(20);
     loop_.run(move |event, _, flow| {
-        if matches!(event, Event::LoopDestroyed) {
-            fixture.take();
-            return;
-        }
         *flow = ControlFlow::WaitUntil(deadline);
         if Instant::now() >= deadline {
             eprintln!("FAIL: extension boundary test timed out");
