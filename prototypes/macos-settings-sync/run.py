@@ -80,6 +80,25 @@ with TemporaryDirectory(prefix="search-sync-probe-") as temporary:
     merged = json.loads(saved)
     assert merged["palette"] == "system"
     assert merged["pageZoom"] == "150"
+    local_settings = {
+        "palette": "graphite", "compact_tabs": False, "page_zoom": "110",
+        "engine": "bing", "private_engine": "duckduckgo", "download_folder": "desktop",
+        "opaque_toolbar": True, "reduced_motion": True, "restore_tabs": False, "record_history": False,
+    }
+    local_bytes = json.dumps(local_settings).encode()
+    projected = run([binary, "apply-settings", snapshot], input=local_bytes,
+                    stdout=PIPE, check=True, timeout=10)
+    assert json.loads(projected.stdout) == {
+        **local_settings, "palette": "system", "compact_tabs": True, "page_zoom": "150",
+    }
+    old_snapshot = work / "without-zoom.json"
+    old_snapshot.write_text(json.dumps({key: value for key, value in merged.items() if key != "pageZoom"}))
+    projected = run([binary, "apply-settings", old_snapshot], input=local_bytes,
+                    stdout=PIPE, check=True, timeout=10)
+    assert json.loads(projected.stdout) == {**local_settings, "palette": "system", "compact_tabs": True}
+    rejected = run([binary, "apply-settings", snapshot], input=b"[]", stdout=PIPE, timeout=10)
+    assert rejected.returncode == 1
+
     assert merged["bookmarks"] == {**combined["bookmarks"], third_address: "Third"}
     exported = run([binary, "export-bookmarks", snapshot], check=True, stdout=PIPE, timeout=10).stdout
     assert json.loads(exported) == [

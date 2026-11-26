@@ -182,6 +182,17 @@ do {
         guard let revision = UUID(uuidString: arguments[2]) else { throw ProbeError.invalidArguments }
         let bookmarks = try importBookmarks()
         try update(url, expected: revision) { $0.bookmarks = bookmarks }
+    case "apply-settings" where arguments.count == 2:
+        let snapshot = try Snapshot.read(url)
+        let bytes = try readBounded(.standardInput, maximumBytes: 4096)
+        guard var settings = try JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+        else { throw ProbeError.invalidArguments }
+        settings["palette"] = snapshot.palette.rawValue
+        settings["compact_tabs"] = snapshot.compactTabs
+        if let zoom = snapshot.pageZoom {
+            settings["page_zoom"] = zoom.rawValue
+        }
+        FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: settings, options: .sortedKeys))
     case "export-bookmarks" where arguments.count == 2:
         let snapshot = try Snapshot.read(url)
         let bookmarks = snapshot.bookmarks.keys.sorted().map { address in
