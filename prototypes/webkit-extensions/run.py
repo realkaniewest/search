@@ -1,6 +1,7 @@
 """Run the WebKit extension probe against a loopback-only fixture."""
 
 import argparse
+import hashlib
 import json
 import os
 import stat
@@ -150,9 +151,38 @@ def enabled_packages(profile):
     return enabled
 
 
+def package_digest(staged):
+    digest = hashlib.sha256()
+    for resource in sorted(staged.rglob("*")):
+        if resource.is_file():
+            name = os.fsencode(resource.relative_to(staged))
+            payload = resource.read_bytes()
+            digest.update(len(name).to_bytes(8, "big"))
+            digest.update(name)
+            digest.update(len(payload).to_bytes(8, "big"))
+            digest.update(payload)
+    return digest.hexdigest()
+
+
+def prepare_enabled_package(profile, identifier, parent):
+    package = enabled_packages(profile)[identifier]
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    with os.fdopen(os.open(profile / f".approved-{identifier}", flags), "rb") as approval:
+        metadata = os.fstat(approval.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != 64:
+            raise ValueError("invalid extension approval record")
+        expected = approval.read(65).decode("ascii")
+    staged = stage_extension(package, parent)
+    if package_digest(staged) != expected:
+        rmtree(staged)
+        raise ValueError("installed extension differs from the approved copy")
+    return staged
+
+
 def remove_package(profile, identifier):
     package = installed_packages(profile)[identifier]
     set_package_enabled(profile, identifier, False)
+    (profile / f".approved-{identifier}").unlink(missing_ok=True)
     # Stop discovering the package before deleting its resources.
     retired = package.rename(profile / f".removed-{uuid4()}")
     rmtree(retired)
@@ -222,6 +252,7 @@ if __name__ == "__main__":
                 profile_dir.mkdir()
                 identifier = uuid4()
                 candidate = staged_fixture(Path(temp))
+                approval = package_digest(candidate)
                 arguments = [options.wry_binary.resolve(), f"http://localhost:{port}/",
                              profile, str(alternate.server_port), candidate]
                 environment = os.environ.copy()
@@ -234,6 +265,7 @@ if __name__ == "__main__":
                     result = run(arguments, env=environment, timeout=30, check=False)
                 if not result.returncode:
                     installed = candidate.rename(profile_dir / str(identifier))
+                    (profile_dir / f".approved-{identifier}").write_text(approval, encoding="ascii")
                     sibling_id = uuid4()
                     sibling = profile_dir / str(sibling_id)
                     sibling.mkdir()
@@ -247,7 +279,17 @@ if __name__ == "__main__":
                     assert installed_packages(profile_dir)[identifier] == installed
                     assert not enabled_packages(profile_dir)
                     set_package_enabled(profile_dir, identifier, True)
-                    arguments[-1] = enabled_packages(profile_dir)[identifier]
+                    script = installed / "marker.js"
+                    reviewed_script = script.read_bytes()
+                    script.write_bytes(b"unapproved replacement")
+                    try:
+                        prepare_enabled_package(profile_dir, identifier, Path(temp))
+                    except ValueError as error:
+                        assert str(error) == "installed extension differs from the approved copy"
+                    else:
+                        raise AssertionError("startup accepted changed extension resources")
+                    script.write_bytes(reviewed_script)
+                    arguments[-1] = prepare_enabled_package(profile_dir, identifier, Path(temp))
                     result = run(arguments, env={**environment, "SEARCH_EXTENSION_VERIFY_RESTART": "1"},
                                  timeout=30, check=False)
                     remove_package(profile_dir, identifier)
@@ -255,6 +297,7 @@ if __name__ == "__main__":
                     assert not installed.exists()
                     assert not enabled_packages(profile_dir)
                     assert not (profile_dir / f".enabled-{identifier}").exists()
+                    assert not (profile_dir / f".approved-{identifier}").exists()
                     assert (sibling / "unchanged").read_bytes() == b"other package"
                     if not result.returncode:
                         print("PASS: a new process loaded the stored package; removal preserved its neighbor")
