@@ -2278,6 +2278,23 @@ fn main() {
                 }
             }
             Event::WindowEvent {
+                event: WindowEvent::Focused(true),
+                ..
+            } if preview && !developer && chrome_ready && !composer_visible => {
+                if let Some((path, legacy)) = settings_path.as_deref().zip(legacy_engine_path.as_deref())
+                    && let Ok(updated) = read_settings(path, legacy)
+                    && updated != settings
+                {
+                    if supports_page_zoom && updated.page_zoom != settings.page_zoom {
+                        for tab in &tabs {
+                            updated.page_zoom.apply(tab);
+                        }
+                    }
+                    settings = updated;
+                    show_settings(&chrome, settings, private, None);
+                }
+            }
+            Event::WindowEvent {
                 event: WindowEvent::Resized(_),
                 ..
             } => {
