@@ -26,6 +26,17 @@ pub(crate) enum Outcome {
     Failed,
 }
 
+impl Outcome {
+    pub(crate) fn notice(&self, notify_complete: bool) -> Option<&'static str> {
+        match self {
+            Self::Saved => notify_complete.then_some("Файл сохранён."),
+            Self::Cancelled => Some("Загрузка отменена."),
+            Self::DestinationExists => Some("Файл с таким именем уже есть. Выбери другое имя."),
+            Self::Failed => Some("Не удалось скачать файл по этому адресу."),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct DownloadControl(AtomicU8);
 
@@ -80,7 +91,7 @@ pub(crate) fn choose_destination(
     panel.setMessage(Some(&NSString::from_str(
         "Выбери новое имя файла. Search сохраняет существующие файлы.",
     )));
-    if let Some(path) = directory.and_then(Path::to_str) {
+    if let Some(path) = initial_directory(directory) {
         let directory_url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(path), true);
         panel.setDirectoryURL(Some(&directory_url));
     }
@@ -99,6 +110,12 @@ pub(crate) fn choose_destination(
         complete(destination);
     });
     panel.beginSheetModalForWindow_completionHandler(window, &callback);
+}
+
+fn initial_directory(directory: Option<&Path>) -> Option<&str> {
+    directory
+        .filter(|path| path.is_absolute() && path.is_dir())
+        .and_then(Path::to_str)
 }
 
 fn suggested_name(url: &Url) -> String {
@@ -266,6 +283,18 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn initial_directory_uses_only_existing_absolute_folders() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        std::fs::write(&file, b"").unwrap();
+        assert_eq!(initial_directory(Some(root.path())), root.path().to_str());
+        assert_eq!(initial_directory(Some(&file)), None);
+        assert_eq!(initial_directory(Some(&root.path().join("missing"))), None);
+        assert_eq!(initial_directory(Some(Path::new("."))), None);
+        assert_eq!(initial_directory(None), None);
+    }
+
+    #[test]
     fn mid_transfer_cancellation_removes_staged_bytes() {
         let root = tempfile::tempdir().unwrap();
         let destination = root.path().join("cancelled.txt");
@@ -296,14 +325,19 @@ mod tests {
         std::fs::write(&path, b"existing").unwrap();
         let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
         staged.write_all(b"replacement").unwrap();
-        assert_eq!(finish(staged, &path), Outcome::DestinationExists);
+        let outcome = finish(staged, &path);
+        assert_eq!(outcome, Outcome::DestinationExists);
+        assert!(outcome.notice(false).is_some());
         assert_eq!(std::fs::read(&path).unwrap(), b"existing");
         assert_eq!(root.path().read_dir().unwrap().count(), 1);
 
         let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
         staged.write_all(b"completed").unwrap();
         let path = root.path().join("other.txt");
-        assert_eq!(finish(staged, &path), Outcome::Saved);
+        let outcome = finish(staged, &path);
+        assert_eq!(outcome, Outcome::Saved);
+        assert!(outcome.notice(true).is_some());
+        assert_eq!(outcome.notice(false), None);
         assert_eq!(std::fs::read(path).unwrap(), b"completed");
     }
 
@@ -314,7 +348,10 @@ mod tests {
         let path = root.path().join("file.txt");
         let control = DownloadControl::default();
         assert!(control.cancel());
-        assert_eq!(fetch(&url, &path, &control), Outcome::Cancelled);
+        let outcome = fetch(&url, &path, &control);
+        assert_eq!(outcome, Outcome::Cancelled);
+        assert!(outcome.notice(false).is_some());
+        assert!(Outcome::Failed.notice(false).is_some());
         assert_eq!(root.path().read_dir().unwrap().count(), 0);
     }
 }

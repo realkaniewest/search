@@ -83,6 +83,20 @@ pub struct WryWebViewUIDelegateIvars {
   #[cfg(target_os = "macos")]
   new_windows: Rc<RefCell<Vec<NewWindow>>>,
   permission_handler: Option<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>,
+  #[cfg(target_os = "macos")]
+  native_permission_observer: Option<Box<crate::NativePermissionObserver>>,
+  #[cfg(target_os = "macos")]
+  native_permission_denial_handler: Option<Box<crate::NativePermissionDenialHandler>>,
+}
+
+#[cfg(target_os = "macos")]
+struct DenyPermission(block2::RcBlock<dyn Fn(WKPermissionDecision)>);
+
+#[cfg(target_os = "macos")]
+impl Drop for DenyPermission {
+  fn drop(&mut self) {
+    self.0.call((WKPermissionDecision::Deny,));
+  }
 }
 
 define_class!(
@@ -92,6 +106,34 @@ define_class!(
   pub struct WryWebViewUIDelegate;
 
   unsafe impl NSObjectProtocol for WryWebViewUIDelegate {}
+
+  impl WryWebViewUIDelegate {
+    // Public WebKit delegate selector on macOS 27 and later.
+    // Older WebKit versions do not invoke this method.
+    #[cfg(target_os = "macos")]
+    #[unsafe(method(webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:))]
+    fn request_geolocation_permission(
+      &self,
+      _webview: &WryWebView,
+      origin: &WKSecurityOrigin,
+      frame: &WKFrameInfo,
+      decision_handler: &Block<dyn Fn(WKPermissionDecision)>,
+    ) {
+      if let Some(handler) = &self.ivars().native_permission_denial_handler {
+        // WebKit expects a reply even if the application discards the request.
+        let block = unsafe { block2::RcBlock::copy(std::ptr::from_ref(decision_handler).cast_mut()) };
+        if let Some(block) = block {
+          let denial = DenyPermission(block);
+          handler(origin, frame, crate::MacosPermissionRequest::Geolocation, Box::new(move || drop(denial)));
+          return;
+        }
+      }
+      decision_handler.call((WKPermissionDecision::Deny,));
+      if let Some(observer) = &self.ivars().native_permission_observer {
+        observer(origin, frame, crate::MacosPermissionRequest::Geolocation);
+      }
+    }
+  }
 
   unsafe impl WKUIDelegate for WryWebViewUIDelegate {
     #[cfg(target_os = "macos")]
@@ -140,6 +182,22 @@ define_class!(
       capture_type: WKMediaCaptureType,
       decision_handler: &Block<dyn Fn(WKPermissionDecision)>,
     ) {
+      #[cfg(target_os = "macos")]
+      if let Some(handler) = &self.ivars().native_permission_denial_handler {
+        let block = unsafe { block2::RcBlock::copy(std::ptr::from_ref(decision_handler).cast_mut()) };
+        if let Some(block) = block {
+          let denial = DenyPermission(block);
+          handler(
+            _origin,
+            _frame,
+            crate::MacosPermissionRequest::MediaCapture(capture_type),
+            Box::new(move || drop(denial)),
+          );
+        } else {
+          decision_handler.call((WKPermissionDecision::Deny,));
+        }
+        return;
+      }
       // Call user's permission handler if set
       let decision = if let Some(handler) = &self.ivars().permission_handler {
         let translate_response = |res: PermissionResponse| match res {
@@ -170,6 +228,10 @@ define_class!(
       };
 
       (*decision_handler).call((decision,));
+      #[cfg(target_os = "macos")]
+      if let Some(observer) = &self.ivars().native_permission_observer {
+        observer(_origin, _frame, crate::MacosPermissionRequest::MediaCapture(capture_type));
+      }
     }
 
     #[cfg(target_os = "macos")]
@@ -303,6 +365,8 @@ impl WryWebViewUIDelegate {
     mtm: MainThreadMarker,
     new_window_req_handler: Option<Box<dyn Fn(String, NewWindowFeatures) -> NewWindowResponse>>,
     permission_handler: Option<Box<dyn Fn(PermissionKind) -> PermissionResponse + Send + Sync>>,
+    #[cfg(target_os = "macos")] native_permission_observer: Option<Box<crate::NativePermissionObserver>>,
+    #[cfg(target_os = "macos")] native_permission_denial_handler: Option<Box<crate::NativePermissionDenialHandler>>,
   ) -> Retained<Self> {
     #[cfg(target_os = "ios")]
     let _new_window_req_handler = new_window_req_handler;
@@ -315,6 +379,10 @@ impl WryWebViewUIDelegate {
         #[cfg(target_os = "macos")]
         new_windows: Rc::new(RefCell::new(vec![])),
         permission_handler,
+        #[cfg(target_os = "macos")]
+        native_permission_observer,
+        #[cfg(target_os = "macos")]
+        native_permission_denial_handler,
       });
     unsafe { msg_send![super(delegate), init] }
   }

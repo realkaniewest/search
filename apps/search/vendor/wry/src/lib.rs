@@ -1588,6 +1588,10 @@ pub(crate) struct PlatformSpecificWebViewAttributes {
   limit_navigations_to_app_bound_domains: bool,
   #[cfg(target_os = "macos")]
   webview_configuration: Option<Retained<objc2_web_kit::WKWebViewConfiguration>>,
+  #[cfg(target_os = "macos")]
+  native_permission_observer: Option<Box<NativePermissionObserver>>,
+  #[cfg(target_os = "macos")]
+  native_permission_denial_handler: Option<Box<NativePermissionDenialHandler>>,
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1605,6 +1609,10 @@ impl Default for PlatformSpecificWebViewAttributes {
       limit_navigations_to_app_bound_domains: false,
       #[cfg(target_os = "macos")]
       webview_configuration: None,
+      #[cfg(target_os = "macos")]
+      native_permission_observer: None,
+      #[cfg(target_os = "macos")]
+      native_permission_denial_handler: None,
     }
   }
 }
@@ -1660,7 +1668,50 @@ impl WebViewBuilderExtDarwin for WebViewBuilder<'_> {
 }
 
 #[cfg(target_os = "macos")]
+/// Request type provided by the native WKWebView permission delegate.
+pub enum MacosPermissionRequest {
+  /// Camera, microphone, or combined media capture.
+  MediaCapture(objc2_web_kit::WKMediaCaptureType),
+  /// Device location.
+  Geolocation,
+}
+
+#[cfg(target_os = "macos")]
+type NativePermissionObserver = dyn Fn(
+  &objc2_web_kit::WKSecurityOrigin,
+  &objc2_web_kit::WKFrameInfo,
+  MacosPermissionRequest,
+);
+
+#[cfg(target_os = "macos")]
+type NativePermissionDenialHandler = dyn Fn(
+  &objc2_web_kit::WKSecurityOrigin,
+  &objc2_web_kit::WKFrameInfo,
+  MacosPermissionRequest,
+  Box<dyn FnOnce()>,
+);
+
+#[cfg(target_os = "macos")]
 pub trait WebViewBuilderExtMacos {
+  /// Defer an explicit denial of a native permission request. Dropping the reply also denies the request.
+  fn with_native_permission_denial_handler(
+    self,
+    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, MacosPermissionRequest, Box<dyn FnOnce()>)
+      + 'static,
+  ) -> Self;
+
+
+  /// Observe the native origin and frame of a permission request after the permission decision.
+  /// The observer cannot change the permission decision.
+  fn with_native_permission_observer(
+    self,
+    observer: impl Fn(
+        &objc2_web_kit::WKSecurityOrigin,
+        &objc2_web_kit::WKFrameInfo,
+        MacosPermissionRequest,
+      ) + 'static,
+  ) -> Self;
+
   /// Set the webview configuration that must be used to create the new webview.
   fn with_webview_configuration(
     self,
@@ -1670,6 +1721,28 @@ pub trait WebViewBuilderExtMacos {
 
 #[cfg(target_os = "macos")]
 impl WebViewBuilderExtMacos for WebViewBuilder<'_> {
+  fn with_native_permission_denial_handler(
+    mut self,
+    handler: impl Fn(&objc2_web_kit::WKSecurityOrigin, &objc2_web_kit::WKFrameInfo, MacosPermissionRequest, Box<dyn FnOnce()>)
+      + 'static,
+  ) -> Self {
+    self.platform_specific.native_permission_denial_handler = Some(Box::new(handler));
+    self
+  }
+
+
+  fn with_native_permission_observer(
+    mut self,
+    observer: impl Fn(
+        &objc2_web_kit::WKSecurityOrigin,
+        &objc2_web_kit::WKFrameInfo,
+        MacosPermissionRequest,
+      ) + 'static,
+  ) -> Self {
+    self.platform_specific.native_permission_observer = Some(Box::new(observer));
+    self
+  }
+
   fn with_webview_configuration(
     mut self,
     configuration: Retained<objc2_web_kit::WKWebViewConfiguration>,

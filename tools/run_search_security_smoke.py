@@ -2,6 +2,7 @@
 
 import http.server
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,9 +12,35 @@ from pathlib import Path
 
 HOST = "127.0.0.1"
 PORT = 43127
+MEDIA_FRAME_PORT = 43128
 TITLE = "Search security fixture ready"
 
-def fixture_page(file_url):
+MEDIA_FRAME = b"""<!doctype html><script>
+(async () => {
+    const geolocation = %%GEOLOCATION%% && navigator.geolocation
+        ? new Promise(resolve => navigator.geolocation.getCurrentPosition(
+            () => resolve('granted'),
+            error => resolve(error.code === 1 ? 'denied' : 'unavailable'),
+            {timeout: 6000}))
+        : Promise.resolve('unavailable');
+    let outcome = 'unavailable';
+    if (navigator.mediaDevices?.getUserMedia) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+            stream.getTracks().forEach(track => track.stop());
+            outcome = 'granted';
+        } catch (error) {
+            outcome = error.name === 'NotAllowedError' || error.name === 'SecurityError'
+                ? 'denied' : error.name;
+        }
+    }
+    parent.postMessage({microphone: outcome, geolocation: await geolocation}, "http://127.0.0.1:43127");
+})();
+</script>"""
+
+
+def fixture_page(file_url, child_url=None):
+    child_origin = child_url.rsplit("/", 1)[0] if child_url else None
     return f"""<!doctype html><html><head><meta charset='utf-8'><title>{TITLE}</title></head>
 <body><h1>Search security fixture</h1><script>
 (async () => {{
@@ -27,6 +54,29 @@ def fixture_page(file_url):
   try {{ result.popup = !!window.open('https://blocked.invalid/', '_blank'); }} catch (_) {{}}
   const link = document.createElement('a'); link.href = '/download'; link.download = 'blocked.txt';
   document.body.append(link); link.click();
+  if ({json.dumps(child_url is not None)}) {{
+    const frameResult = await new Promise(resolve => {{
+      const frame = document.createElement('iframe');
+      function finish(outcome) {{
+        window.removeEventListener('message', receive);
+        clearTimeout(timeout);
+        frame.remove();
+        resolve(outcome);
+      }}
+      function receive(event) {{
+        if (event.origin === {json.dumps(child_origin)} && event.source === frame.contentWindow &&
+            typeof event.data?.microphone === 'string' &&
+            typeof event.data?.geolocation === 'string') finish(event.data);
+      }}
+      window.addEventListener('message', receive);
+      const timeout = setTimeout(() => finish({{microphone: 'timeout', geolocation: 'timeout'}}), 6500);
+      frame.allow = 'microphone *; geolocation *';
+      frame.src = {json.dumps(child_url)};
+      document.body.append(frame);
+    }});
+    result.frameMicrophone = frameResult.microphone;
+    result.frameGeolocation = frameResult.geolocation;
+  }}
   if (navigator.mediaDevices?.getUserMedia) {{
     async function checkMedia(constraints) {{
       return Promise.race([
@@ -35,7 +85,7 @@ def fixture_page(file_url):
           return 'granted';
         }}, error => error.name === 'NotAllowedError' || error.name === 'SecurityError'
           ? 'denied' : 'media-error:' + error.name),
-        new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+        new Promise(resolve => setTimeout(() => resolve('timeout'), 6000))
       ]);
     }}
     result.camera = await checkMedia({{video: true}});
@@ -47,9 +97,9 @@ def fixture_page(file_url):
         () => resolve('granted'),
         error => resolve(error.code === 1 ? 'denied'
           : error.code === 2 ? 'unavailable' : error.code === 3 ? 'timeout' : 'error'),
-        {{timeout: 2500}}
+        {{timeout: 6000}}
       )),
-      new Promise(resolve => setTimeout(() => resolve('timeout'), 2500))
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 6000))
     ]);
   }}
   // Both targets are test-owned. The scheme has no registered application.
@@ -72,10 +122,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
     page = b""
     results = []
     downloads = 0
+    frame_geolocation = False
 
     def do_GET(self):
         if self.path == "/":
             data, kind = type(self).page, "text/html; charset=utf-8"
+        elif self.path == "/permission-bootstrap":
+            if os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET") == "deferred-geolocation-navigation":
+                data = b"""<!doctype html><title>Search geolocation bootstrap</title><script>
+navigator.geolocation?.getCurrentPosition(() => {}, () => {});
+</script>"""
+            else:
+                data = b"""<!doctype html><title>Search permission bootstrap</title><script>
+navigator.mediaDevices?.getUserMedia({audio: true}).then(stream => {
+    stream.getTracks().forEach(track => track.stop());
+}, () => {});
+</script>"""
+            kind = "text/html; charset=utf-8"
+        elif self.path == "/media-frame":
+            data = MEDIA_FRAME.replace(b"%%GEOLOCATION%%", b"true" if self.frame_geolocation else b"false")
+            kind = "text/html; charset=utf-8"
         elif self.path == "/download":
             type(self).downloads += 1
             data, kind = b"blocked download", "application/octet-stream"
@@ -109,22 +175,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: run_search_security_smoke.py <binary> [wrapper args]", file=sys.stderr)
+    command = sys.argv[1:]
+    require_media_origin = False
+    require_geolocation_origin = False
+    while command and command[0] in ("--require-media-origin", "--require-geolocation-origin"):
+        flag = command.pop(0)
+        require_media_origin |= flag == "--require-media-origin"
+        require_geolocation_origin |= flag == "--require-geolocation-origin"
+    if not command:
+        print("Usage: run_search_security_smoke.py [--require-media-origin] [--require-geolocation-origin] <binary> [wrapper args]", file=sys.stderr)
         return 2
     with tempfile.TemporaryDirectory(prefix="search-navigation-smoke-") as directory:
         canary = Path(directory) / "canary.html"
         canary.write_text("<title>Search file navigation canary</title>", encoding="utf-8")
-        Handler.page = fixture_page(canary.as_uri())
-        return run_fixture(sys.argv[1:] + ["--security-smoke"])
+        return run_fixture(command + ["--security-smoke"], canary.as_uri(), require_media_origin, require_geolocation_origin)
 
 
-def run_fixture(command):
+def run_fixture(command, file_url, require_media_origin, require_geolocation_origin):
+    if require_media_origin or require_geolocation_origin:
+        with http.server.ThreadingHTTPServer((HOST, MEDIA_FRAME_PORT), Handler) as alternate:
+            thread = threading.Thread(target=alternate.serve_forever, daemon=True)
+            thread.start()
+            try:
+                return run_fixtures(command, file_url, require_media_origin, require_geolocation_origin)
+            finally:
+                alternate.shutdown()
+                thread.join()
+    return run_fixtures(command, file_url, require_media_origin, require_geolocation_origin)
+
+
+def run_fixtures(command, file_url, require_media_origin, require_geolocation_origin):
     server = http.server.ThreadingHTTPServer((HOST, PORT), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        for attempt in (1, 2):
+        verify_origins = require_media_origin or require_geolocation_origin
+        sheet_mode = os.environ.get("SEARCH_SMOKE_PERMISSION_SHEET")
+        deferred_media = sheet_mode in ("deferred-media", "deferred-media-navigation")
+        deferred_geolocation = sheet_mode in ("deferred-geolocation", "deferred-geolocation-navigation")
+        Handler.frame_geolocation = require_geolocation_origin
+        for attempt in range(3 if verify_origins else 2):
+            # WebKit can reuse an earlier denial within a view. A fresh process
+            # keeps the first request attributable to the intended frame.
+            child_frame = verify_origins and attempt > 0
+            alternate = verify_origins and attempt == 2
+            expected_frame = "child" if child_frame else "main"
+            expected_origin = "alternate" if alternate else "primary"
+            child_url = f"http://{HOST}:{MEDIA_FRAME_PORT if alternate else PORT}/media-frame"
+            Handler.page = fixture_page(file_url, child_url if child_frame else None)
             try:
                 run = subprocess.run(command, capture_output=True, text=True, timeout=65, check=False)
             except subprocess.TimeoutExpired as error:
@@ -135,10 +233,34 @@ def run_fixture(command):
                 return 1
             print(run.stdout, end="")
             print(run.stderr, end="", file=sys.stderr)
-            results = Handler.results[(attempt - 1) * 2:]
+            results = Handler.results[attempt * 2:]
             if run.returncode != 0 or "PASS: Search security boundary checks" not in run.stdout:
                 print(f"Fixture result: {results!r}", file=sys.stderr)
                 print("FAIL: Search did not confirm boundary checks", file=sys.stderr)
+                return 1
+            if require_media_origin and (
+                run.stdout.count(f"SECURITY: media_origin=primary frame={expected_frame} frame_origin={expected_origin}") < 2
+                or "SECURITY: media_origin=unexpected" in run.stdout
+                or "frame_origin=unexpected" in run.stdout
+            ):
+                print(f"FAIL: WebKit did not report the expected {expected_frame}-frame media origin", file=sys.stderr)
+                return 1
+            if require_geolocation_origin and (
+                run.stdout.count(f"SECURITY: geolocation_origin=primary frame={expected_frame} frame_origin={expected_origin}") < 2
+                or "SECURITY: geolocation_origin=unexpected" in run.stdout
+            ):
+                print("FAIL: WebKit did not report the expected geolocation origin", file=sys.stderr)
+                return 1
+            if deferred_media and run.stdout.count("SECURITY: deferred_media_denied") != 1:
+                print("FAIL: expected one deferred media denial", file=sys.stderr)
+                return 1
+            if deferred_geolocation and run.stdout.count("SECURITY: deferred_geolocation_denied") != 1:
+                print("FAIL: expected one deferred geolocation denial", file=sys.stderr)
+                return 1
+            if sheet_mode in ("deferred-geolocation-navigation", "deferred-media-navigation") and (
+                "SECURITY: permission_sheet_dismissed=true navigation=true" not in run.stdout
+            ):
+                print("FAIL: navigation did not cancel the pending permission sheet", file=sys.stderr)
                 return 1
             if len(results) != 2:
                 print(f"FAIL: expected two fixture tabs, received {len(results)}", file=sys.stderr)
@@ -151,9 +273,27 @@ def run_fixture(command):
                     if result.get(check) is not True:
                         print(f"FAIL: {check} unverified: {result!r}", file=sys.stderr)
                         return 1
+                if child_frame and require_geolocation_origin and result.get("frameGeolocation") != "denied":
+                    print(f"FAIL: unexpected child-frame geolocation result: {result.get('frameGeolocation')}", file=sys.stderr)
+                    return 1
+                if child_frame and require_media_origin and result.get("frameMicrophone") != "denied":
+                    print(f"FAIL: unexpected child-frame media result: {result.get('frameMicrophone')}", file=sys.stderr)
+                    return 1
                 permission_results = {
                     name: result.get(name) for name in ("camera", "microphone", "geolocation")
                 }
+                if (require_geolocation_origin or deferred_geolocation) and permission_results["geolocation"] != "denied":
+                    print("FAIL: native geolocation denial did not reach the page", file=sys.stderr)
+                    return 1
+                if deferred_media and permission_results["microphone"] != "denied":
+                    print("FAIL: native microphone denial did not reach the page", file=sys.stderr)
+                    return 1
+                if deferred_media:
+                    # Hosted macOS can reject camera constraints before consulting WebKit's delegate.
+                    camera = permission_results["camera"]
+                    if camera not in ("denied", "media-error:OverconstrainedError"):
+                        print(f"FAIL: unexpected camera result: {camera}", file=sys.stderr)
+                        return 1
                 print(f"Permission results: {permission_results}")
                 if (
                     any(

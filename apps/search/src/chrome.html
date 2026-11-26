@@ -335,7 +335,8 @@
         <label class="setting-row"><span>Масштаб страниц<small>Применяется к сайтам в обычном и временном окне.</small></span><select name="page_zoom"><option value="75">75%</option><option value="90">90%</option><option value="100">100%</option><option value="110">110%</option><option value="125">125%</option><option value="150">150%</option><option value="200">200%</option></select></label>
       </fieldset>
       <fieldset><legend>Загрузки</legend>
-        <label class="setting-row"><span>Начальная папка<small>Search откроет её в окне сохранения. Путь можно изменить перед скачиванием.</small></span><select name="download_folder"><option value="recent">Последняя использованная</option><option value="downloads">Загрузки</option><option value="desktop">Рабочий стол</option><option value="documents">Документы</option></select></label>
+        <label class="setting-row"><span>Начальная папка<small>Папку можно изменить в окне сохранения. Если выбранная папка недоступна, macOS предложит другую.</small></span><select name="download_folder"><option value="recent">Последняя использованная</option><option value="downloads">Загрузки</option><option value="desktop">Рабочий стол</option><option value="documents">Документы</option></select></label>
+        <label class="setting-row"><span>Показывать сообщение после скачивания</span><input type="checkbox" name="notify_download_complete"></label>
       </fieldset>
       <fieldset><legend>Запуск и история</legend>
         <label class="setting-row"><span>Восстанавливать вкладки<small>Если выключено, следующий запуск начнётся с новой вкладки.</small></span><input type="checkbox" name="restore_tabs"></label>
@@ -494,7 +495,10 @@
     bookmarkToggle.setAttribute('aria-pressed', String(saved));
   }
   bookmarkToggle.onclick = () => {
-    if (!bookmarkToggle.disabled) send({type:'bookmark-toggle'});
+    const url = window.searchState.tabs[window.searchState.active]?.url;
+    if (!bookmarkToggle.disabled && url) {
+      send({type:'bookmark-set', url, saved:!bookmarkEntries.some(entry => entry.url === url)});
+    }
   };
   function dismissHistory() {
     historyShowing = false;
@@ -690,7 +694,7 @@
   const settingsStatus = document.getElementById('settings-status');
   const systemDark = matchMedia('(prefers-color-scheme: dark)');
   const defaults = {engine:'google', private_engine:'google', palette:'graphite', compact_tabs:false,
-    reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent'};
+    reduced_motion:false, opaque_toolbar:false, restore_tabs:true, record_history:true, page_zoom:'100', download_folder:'recent', notify_download_complete:true};
   let appliedSettings = defaults;
   let settingsShowing = false;
   let savingSettings = false;
@@ -716,17 +720,28 @@
     root.toggleAttribute('data-opaque', opaque_toolbar);
   }
   window.renderSettings = (values, privateMode, outcome) => {
+    const previous = appliedSettings;
+    const draft = outcome === 'conflict' ? readSettings() : null;
     appliedSettings = values;
     applyAppearance();
     window.restoreSearchEngine(privateMode ? values.private_engine : values.engine);
     if (outcome === null) return;
     savingSettings = false;
-    if (outcome !== 'failed') fillSettings(values);
+    if (draft) {
+      fillSettings(Object.fromEntries(Object.keys(defaults).map(name =>
+        [name, draft[name] === previous[name] ? values[name] : draft[name]]
+      )));
+    } else if (outcome === 'saved') {
+      fillSettings(values);
+    }
     settingsEdited();
     if (settingsShowing) (settingsSave.disabled ? settingsClose : settingsSave).focus();
     settingsStatus.textContent = {
       saved:'Настройки сохранены',
-      conflict:'Настройки изменились в другом окне. Загружены актуальные значения.',
+      conflict:settingsSave.disabled
+        ? 'Настройки обновлены из другого окна.'
+        : 'Настройки обновлены из другого окна. Проверьте свои правки и сохраните их.',
+      'invalid-file':'Search не смог прочитать файл настроек. Исходный файл сохранён.',
       failed:'Не удалось сохранить настройки. Попробуйте ещё раз.',
     }[outcome];
   };
@@ -880,6 +895,7 @@
         e.preventDefault();
         const controls = [...settingsDialog.querySelectorAll('button, input, select')]
           .filter(control => control.offsetWidth && !control.disabled);
+        if (!controls.length) return;
         const index = controls.indexOf(document.activeElement);
         controls[(index < 0 ? (e.shiftKey ? controls.length - 1 : 0) :
           (index + (e.shiftKey ? -1 : 1) + controls.length) % controls.length)].focus();

@@ -58,6 +58,21 @@ jobs:
       - name: Check Search page boundary on macOS
         if: runner.os == 'macOS'
         run: python3 tools/run_search_security_smoke.py apps/search/target/debug/search-browser
+      - name: Check that navigation cancels a pending media permission on macOS
+        if: runner.os == 'macOS'
+        env:
+          SEARCH_SMOKE_PERMISSION_SHEET: deferred-media-navigation
+        run: python3 tools/run_search_security_smoke.py apps/search/target/debug/search-browser
+      - name: Check Search extension boundaries on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo +1.99.1 build --locked --manifest-path apps/search/Cargo.toml --example extension_boundary_smoke
+          python3 prototypes/webkit-extensions/run.py --wry-binary apps/search/target/debug/examples/extension_boundary_smoke
+      - name: Check Search settings and bookmarks synchronization on macOS
+        if: runner.os == 'macOS'
+        run: |
+          cargo +1.99.1 build --locked --manifest-path apps/search/Cargo.toml --example sync_bookmarks_probe
+          python3 prototypes/macos-settings-sync/run.py --bookmark-reader apps/search/target/debug/examples/sync_bookmarks_probe
       - name: Run Search first window on Windows
         if: runner.os == 'Windows'
         run: python tools/run_search_smoke.py apps/search/target/debug/search-browser.exe --smoke

@@ -10,6 +10,8 @@ mod macos_download;
 mod macos_shortcuts;
 #[cfg(target_os = "macos")]
 mod macos_site_data;
+#[cfg(test)]
+mod permission_policy_probe;
 
 use bookmarks::{Bookmarks, MAX_BOOKMARK_BYTES};
 use history::{History, MAX_HISTORY_BYTES};
@@ -47,9 +49,12 @@ use tao::platform::unix::WindowExtUnix;
 use wry::WebViewBuilderExtUnix;
 #[cfg(target_os = "windows")]
 use wry::WebViewBuilderExtWindows;
+#[cfg(target_os = "macos")]
+use wry::WebViewExtMacOS;
 
 const CHROME_HEIGHT: f64 = 50.0;
 const LOCAL_ORIGIN_PORT: u16 = 43127;
+const MEDIA_FRAME_ORIGIN_PORT: u16 = 43128;
 const MAX_TABS: usize = 12;
 const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const HAS_HTTPS_PREVIEW: bool = cfg!(all(target_os = "macos", debug_assertions))
@@ -123,8 +128,11 @@ enum Command {
     PrivateWindow,
     #[serde(rename = "bookmarks-list")]
     BookmarksList,
-    #[serde(rename = "bookmark-toggle")]
-    BookmarkToggle,
+    #[serde(rename = "bookmark-set")]
+    BookmarkSet {
+        url: String,
+        saved: bool,
+    },
     #[serde(rename = "bookmark-remove")]
     BookmarkRemove {
         value: String,
@@ -269,6 +277,7 @@ struct Settings {
     record_history: bool,
     page_zoom: PageZoom,
     download_folder: DownloadFolder,
+    notify_download_complete: bool,
 }
 
 impl Default for Settings {
@@ -284,17 +293,33 @@ impl Default for Settings {
             record_history: true,
             page_zoom: PageZoom::Standard,
             download_folder: DownloadFolder::Recent,
+            notify_download_complete: true,
         }
     }
 }
 
+fn default_settings(legacy_engine: &Path) -> Settings {
+    Settings {
+        engine: load_search_engine(legacy_engine),
+        ..Settings::default()
+    }
+}
+
+fn read_settings(path: &Path, legacy_engine: &Path) -> io::Result<Settings> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => read_profile_data(path, 4096)
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or(io::ErrorKind::InvalidData.into()),
+        Ok(_) => Err(io::ErrorKind::InvalidData.into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Ok(default_settings(legacy_engine))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn load_settings(path: &Path, legacy_engine: &Path) -> Settings {
-    read_profile_data(path, 4096)
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_else(|| Settings {
-            engine: load_search_engine(legacy_engine),
-            ..Settings::default()
-        })
+    read_settings(path, legacy_engine).unwrap_or_else(|_| default_settings(legacy_engine))
 }
 
 fn update_settings(
@@ -302,6 +327,13 @@ fn update_settings(
     legacy_engine: &Path,
     update: impl FnOnce(Settings) -> io::Result<Settings>,
 ) -> io::Result<Settings> {
+    let _lock = lock_profile_file(path)?;
+    let updated = update(read_settings(path, legacy_engine)?)?;
+    save_preference(path, &updated)?;
+    Ok(updated)
+}
+
+fn lock_profile_file(path: &Path) -> io::Result<fs::File> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     fs::create_dir_all(parent)?;
     let lock = fs::OpenOptions::new()
@@ -311,9 +343,25 @@ fn update_settings(
         .truncate(false)
         .open(path.with_extension("lock"))?;
     lock.lock()?;
-    let updated = update(load_settings(path, legacy_engine))?;
-    save_preference(path, &updated)?;
-    Ok(updated)
+    Ok(lock)
+}
+
+fn update_bookmarks(
+    path: &Path,
+    update: impl FnOnce(&mut Bookmarks) -> bool,
+) -> io::Result<Bookmarks> {
+    let _lock = lock_profile_file(path)?;
+    let mut bookmarks = if path.try_exists()? {
+        read_profile_data(path, MAX_BOOKMARK_BYTES)
+            .and_then(|bytes| Bookmarks::from_json(&bytes))
+            .ok_or(io::ErrorKind::InvalidData)?
+    } else {
+        Bookmarks::default()
+    };
+    if update(&mut bookmarks) {
+        save_preference(path, &bookmarks)?;
+    }
+    Ok(bookmarks)
 }
 
 fn show_settings(chrome: &WebView, settings: Settings, private: bool, saved: Option<&str>) {
@@ -406,6 +454,79 @@ fn load_session(path: &Path) -> Option<SavedSession> {
     Some(session)
 }
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum FixtureSheetMode {
+    Dismiss,
+    Navigate,
+    DeferredMedia,
+    DeferredMediaNavigate,
+    DeferredGeolocation,
+    DeferredGeolocationNavigate,
+}
+
+#[cfg(target_os = "macos")]
+impl FixtureSheetMode {
+    fn from_env() -> Option<Self> {
+        Some(
+            match env::var("SEARCH_SMOKE_PERMISSION_SHEET").ok()?.as_str() {
+                "1" => Self::Dismiss,
+                "navigation" => Self::Navigate,
+                "deferred-media" => Self::DeferredMedia,
+                "deferred-media-navigation" => Self::DeferredMediaNavigate,
+                "deferred-geolocation" => Self::DeferredGeolocation,
+                "deferred-geolocation-navigation" => Self::DeferredGeolocationNavigate,
+                _ => return None,
+            },
+        )
+    }
+
+    fn deferred_kind(self) -> Option<&'static str> {
+        match self {
+            Self::DeferredMedia | Self::DeferredMediaNavigate => Some("media"),
+            Self::DeferredGeolocation | Self::DeferredGeolocationNavigate => Some("geolocation"),
+            _ => None,
+        }
+    }
+
+    fn navigates(self) -> bool {
+        matches!(
+            self,
+            Self::Navigate | Self::DeferredMediaNavigate | Self::DeferredGeolocationNavigate
+        )
+    }
+}
+
+#[cfg(target_os = "macos")]
+type PendingFixtureDenial = (u64, &'static str, Box<dyn FnOnce()>);
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static FIXTURE_PERMISSION_DENIAL: std::cell::RefCell<Option<PendingFixtureDenial>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+#[cfg(target_os = "macos")]
+fn finish_fixture_permission(owner: Option<u64>) {
+    let pending = FIXTURE_PERMISSION_DENIAL.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if owner.is_none()
+            || pending
+                .as_ref()
+                .is_some_and(|(id, _, _)| Some(*id) == owner)
+        {
+            pending.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, kind, deny)) = pending {
+        deny();
+        println!("SECURITY: deferred_{kind}_denied");
+    }
+}
+
 #[derive(Debug)]
 enum AppEvent {
     #[cfg(target_os = "macos")]
@@ -438,6 +559,10 @@ enum AppEvent {
     },
     NavigationTick,
     SecurityProgress(u64),
+    #[cfg(target_os = "macos")]
+    FixturePermissionRequest(u64, &'static str),
+    #[cfg(target_os = "macos")]
+    FixturePermissionDismissed(bool),
     SecurityTick,
     TimedOut,
     Command(Command),
@@ -902,6 +1027,10 @@ fn create_content(
         .map(|url| url.origin());
     let navigation_counts = counts;
     let fixture_proxy = proxy.clone();
+    #[cfg(target_os = "macos")]
+    let permission_proxy = proxy.clone();
+    #[cfg(target_os = "macos")]
+    let denial_proxy = proxy.clone();
     let security_fixture = navigation_counts.fixture_mode && matches!(page, Page::LocalFixture);
     let builder = WebViewBuilder::new()
         .with_bounds(rect)
@@ -947,6 +1076,10 @@ fn create_content(
                 target == "about:blank" || preview_url(&target).is_some()
             } else {
                 permits_content_navigation(&target, &policy)
+                    || (security_fixture
+                        && policy.load(Ordering::SeqCst)
+                        && target
+                            == format!("http://127.0.0.1:{MEDIA_FRAME_ORIGIN_PORT}/media-frame"))
             };
             if env::var_os("SEARCH_DEBUG_NAV").is_some() {
                 eprintln!("content navigation allowed={allowed}");
@@ -979,6 +1112,92 @@ fn create_content(
         builder.with_html(start_document(developer))
     } else {
         builder.with_url(initial_url)
+    };
+    #[cfg(target_os = "macos")]
+    let builder = if security_fixture {
+        use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
+        let show_fixture_sheet =
+            FixtureSheetMode::from_env().is_some_and(|mode| mode.deferred_kind().is_none());
+        builder.with_native_permission_observer(move |origin, frame, request| {
+            // WebKit supplies these objects only for the duration of this callback.
+            let source = |origin: &objc2_web_kit::WKSecurityOrigin| {
+                let (local_host, port) = unsafe {
+                    (
+                        origin.protocol().to_string() == "http"
+                            && origin.host().to_string() == "127.0.0.1",
+                        origin.port(),
+                    )
+                };
+                match (local_host, port) {
+                    (true, port) if port == LOCAL_ORIGIN_PORT as isize => "primary",
+                    (true, port) if port == MEDIA_FRAME_ORIGIN_PORT as isize => "alternate",
+                    _ => "unexpected",
+                }
+            };
+            let callback_source = source(origin);
+            let frame_source = source(&*unsafe { frame.securityOrigin() });
+            let frame_kind = if unsafe { frame.isMainFrame() } { "main" } else { "child" };
+            let request_kind = match request {
+                MacosPermissionRequest::MediaCapture(_) => "media",
+                MacosPermissionRequest::Geolocation => "geolocation",
+            };
+            println!("SECURITY: {request_kind}_origin={callback_source} frame={frame_kind} frame_origin={frame_source}");
+            if show_fixture_sheet && frame_kind == "main"
+                && callback_source == "primary" && frame_source == "primary"
+            {
+                let _ = permission_proxy.send_event(AppEvent::FixturePermissionRequest(id, request_kind));
+            }
+        })
+    } else {
+        builder
+    };
+    #[cfg(target_os = "macos")]
+    let builder = if let Some(kind) = (security_fixture && id == 1)
+        .then(FixtureSheetMode::from_env)
+        .flatten()
+        .and_then(FixtureSheetMode::deferred_kind)
+    {
+        use wry::{MacosPermissionRequest, WebViewBuilderExtMacos};
+        let deferred_once = std::cell::Cell::new(false);
+        builder.with_native_permission_denial_handler(move |origin, frame, request, deny| {
+            let request_kind = match request {
+                MacosPermissionRequest::MediaCapture(_) => "media",
+                MacosPermissionRequest::Geolocation => "geolocation",
+            };
+            let is_primary = |origin: &objc2_web_kit::WKSecurityOrigin| unsafe {
+                origin.protocol().to_string() == "http"
+                    && origin.host().to_string() == "127.0.0.1"
+                    && origin.port() == LOCAL_ORIGIN_PORT as isize
+            };
+            if request_kind != kind
+                || deferred_once.get()
+                || !unsafe { frame.isMainFrame() }
+                || !is_primary(origin)
+                || !is_primary(&*unsafe { frame.securityOrigin() })
+            {
+                return;
+            }
+            let stored = FIXTURE_PERMISSION_DENIAL.with(|pending| {
+                let mut pending = pending.borrow_mut();
+                if pending.is_some() {
+                    return false;
+                }
+                *pending = Some((id, kind, deny));
+                true
+            });
+            if stored {
+                deferred_once.set(true);
+            }
+            if stored
+                && denial_proxy
+                    .send_event(AppEvent::FixturePermissionRequest(id, kind))
+                    .is_err()
+            {
+                finish_fixture_permission(Some(id));
+            }
+        })
+    } else {
+        builder
     };
     #[cfg(target_os = "macos")]
     let builder = if persistent {
@@ -1148,6 +1367,16 @@ fn main() {
     } else {
         Page::Start
     };
+    #[cfg(target_os = "macos")]
+    let fixture_navigation_test = mode == Mode::SecuritySmoke
+        && FixtureSheetMode::from_env().is_some_and(FixtureSheetMode::navigates);
+    #[cfg(not(target_os = "macos"))]
+    let fixture_navigation_test = false;
+    let initial_url = if fixture_navigation_test {
+        "http://127.0.0.1:43127/permission-bootstrap"
+    } else {
+        initial_page.url()
+    };
     let start_selection = (mode != Mode::SecuritySmoke).then(|| Arc::new(AtomicU64::new(1)));
     #[cfg(target_os = "linux")]
     let (first, local_navigation) = create_content(
@@ -1156,7 +1385,7 @@ fn main() {
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        (initial_page, initial_page.url(), start_selection.clone()),
+        (initial_page, initial_url, start_selection.clone()),
         content_rect,
     )
     .expect("Search start page failed");
@@ -1166,7 +1395,7 @@ fn main() {
         1,
         event_loop.create_proxy(),
         security_counts.clone(),
-        (initial_page, initial_page.url(), start_selection.clone()),
+        (initial_page, initial_url, start_selection.clone()),
         content_rect,
     )
     .expect("Search start page failed");
@@ -1187,7 +1416,22 @@ fn main() {
         local_navigation,
     }];
     let mut active = 0usize;
+    #[cfg(target_os = "macos")]
+    let require_fixture_permission_sheet =
+        mode == Mode::SecuritySmoke && FixtureSheetMode::from_env().is_some();
+    #[cfg(not(target_os = "macos"))]
+    let require_fixture_permission_sheet = false;
+    #[cfg(target_os = "macos")]
+    let mut fixture_permission_sheet: Option<(
+        u64,
+        objc2::rc::Retained<objc2_app_kit::NSAlert>,
+    )> = None;
+    #[cfg(target_os = "macos")]
+    let mut fixture_permission_sheet_passed = false;
+    #[cfg(not(target_os = "macos"))]
+    let fixture_permission_sheet_passed = false;
     let mut composer_visible = false;
+    let mut settings_refresh_pending = false;
     #[cfg(target_os = "macos")]
     let mut site_data_pending = false;
     #[cfg(target_os = "macos")]
@@ -1311,6 +1555,20 @@ fn main() {
             }
             event => event,
         };
+        let refresh_settings = |settings: &mut Settings, tabs: &[Tab]| {
+            if let Some((path, legacy)) = settings_path.as_deref().zip(legacy_engine_path.as_deref())
+                && let Ok(updated) = read_settings(path, legacy)
+                && updated != *settings
+            {
+                if supports_page_zoom && updated.page_zoom != settings.page_zoom {
+                    for tab in tabs {
+                        updated.page_zoom.apply(tab);
+                    }
+                }
+                *settings = updated;
+                show_settings(&chrome, updated, private, None);
+            }
+        };
         match command_from_start {
             #[cfg(target_os = "macos")]
             Event::UserEvent(AppEvent::NativeShortcut(shortcut)) => {
@@ -1341,13 +1599,7 @@ fn main() {
             #[cfg(target_os = "macos")]
             Event::UserEvent(AppEvent::DownloadFinished(outcome)) => {
                 if let Some((_, worker)) = download_job.take() { let _ = worker.join(); }
-                use macos_download::Outcome;
-                notice = Some(match outcome {
-                    Outcome::Saved => "Файл сохранён.",
-                    Outcome::Cancelled => "Загрузка отменена.",
-                    Outcome::DestinationExists => "Файл с таким именем уже есть. Выбери другое имя.",
-                    Outcome::Failed => "Не удалось скачать файл по этому адресу.",
-                });
+                notice = outcome.notice(settings.notify_download_complete);
                 let _ = chrome.evaluate_script("window.setDownloadActive(false)");
                 sync_chrome(&chrome, &tabs, active, notice, attempted_address.as_deref());
             }
@@ -1388,6 +1640,16 @@ fn main() {
                 }
             }
             Event::UserEvent(AppEvent::ContentStarted { id, url }) => {
+                #[cfg(target_os = "macos")]
+                if let Some((owner, alert)) = fixture_permission_sheet.as_ref()
+                    && *owner == id
+                {
+                    let parent = chrome.ns_window();
+                    let sheet = alert.window();
+                    if parent.attachedSheet().is_some_and(|attached| std::ptr::eq(&*attached, &*sheet)) {
+                        parent.endSheet_returnCode(&sheet, objc2_app_kit::NSModalResponseAbort);
+                    }
+                }
                 if let Some(tab) = tabs.iter_mut().find(|tab| tab.id == id)
                     && (url == "about:blank" || if developer { developer_url(&url).is_some() } else { navigation_url(&url, preview).is_some() })
                 {
@@ -1431,8 +1693,27 @@ fn main() {
                             tab.title = page.label().to_owned();
                         }
                     }
-                    if supports_page_zoom && !developer && (settings.page_zoom != PageZoom::Standard || matches!(tab.page, Page::Start)) {
+                    if supports_page_zoom && !developer {
                         settings.page_zoom.apply(tab);
+                    }
+                    #[cfg(target_os = "macos")]
+                    if mode == Mode::SecuritySmoke && id == 1
+                        && matches!(tab.page, Page::LocalFixture)
+                        && macos_major_version().is_some_and(|version| version >= 11)
+                    {
+                        let zoom = |view: &WebView| -> f64 {
+                            // pageZoom is public on macOS 11 and newer.
+                            unsafe { objc2::msg_send![&*view.webview(), pageZoom] }
+                        };
+                        PageZoom::ExtraLarge.apply(tab);
+                        let enlarged = zoom(&tab.view);
+                        PageZoom::Standard.apply(tab);
+                        if enlarged != 1.5 || zoom(&tab.view) != 1.0 || zoom(&chrome) != 1.0 {
+                            eprintln!("FAIL: WebKit page zoom did not apply and reset independently of chrome");
+                            *control_flow = ControlFlow::ExitWithCode(1);
+                            return;
+                        }
+                        println!("SMOKE: WebKit page zoom applied 150% and reset to 100%");
                     }
                     if settings.record_history && let Some(path) = &history_path
                         && let Some((_, visited)) = preview_url(&url)
@@ -1470,13 +1751,75 @@ fn main() {
                     security_reports[id as usize - 1] = true;
                 }
             }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::FixturePermissionRequest(id, kind))
+                if require_fixture_permission_sheet
+                    && !fixture_permission_sheet_passed
+                    && fixture_permission_sheet.is_none()
+                    && tabs[active].id == id
+                    && matches!(tabs[active].page, Page::LocalFixture) =>
+            {
+                use objc2::MainThreadMarker;
+                use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSModalResponseAbort};
+                use objc2_foundation::NSString;
+                let window = chrome.ns_window();
+                if window.attachedSheet().is_some() {
+                    finish_fixture_permission(Some(id));
+                    return;
+                }
+                if let Some(main_thread) = MainThreadMarker::new() {
+                    let alert = NSAlert::new(main_thread);
+                    let explanation = if kind == "geolocation" {
+                        "Тестовый запрос к геолокации отклонён"
+                    } else {
+                        "Тестовый запрос к камере или микрофону отклонён"
+                    };
+                    alert.setMessageText(&NSString::from_str(explanation));
+                    alert.setInformativeText(&NSString::from_str(&format!("http://127.0.0.1:{LOCAL_ORIGIN_PORT}")));
+                    alert.addButtonWithTitle(&NSString::from_str("Закрыть"));
+                    let sheet_proxy = content_proxy.clone();
+                    let completion = block2::RcBlock::new(move |response| {
+                        let expected = if fixture_navigation_test { NSModalResponseAbort } else { NSAlertFirstButtonReturn };
+                        let _ = sheet_proxy.send_event(AppEvent::FixturePermissionDismissed(response == expected));
+                    });
+                    alert.beginSheetModalForWindow_completionHandler(&window, Some(&completion));
+                    fixture_permission_sheet = Some((id, alert));
+                    if fixture_navigation_test {
+                        let _ = tabs[active].view.load_url(Page::LocalFixture.url());
+                    }
+                }
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::FixturePermissionRequest(id, _)) => {
+                finish_fixture_permission(Some(id));
+            }
+            #[cfg(target_os = "macos")]
+            Event::UserEvent(AppEvent::FixturePermissionDismissed(dismissed))
+                if require_fixture_permission_sheet =>
+            {
+                fixture_permission_sheet = None;
+                finish_fixture_permission(None);
+                fixture_permission_sheet_passed = dismissed;
+                println!("SECURITY: permission_sheet_dismissed={dismissed} navigation={fixture_navigation_test}");
+            }
             Event::UserEvent(AppEvent::SecurityTick) if mode == Mode::SecuritySmoke => {
+                #[cfg(target_os = "macos")]
+                if let Some((_, alert)) = fixture_permission_sheet.as_ref()
+                    && !fixture_navigation_test
+                {
+                    let sheet = alert.window();
+                    let parent = chrome.ns_window();
+                    if parent.attachedSheet().is_some_and(|attached| std::ptr::eq(&*attached, &*sheet)) {
+                        parent.endSheet_returnCode(&sheet, objc2_app_kit::NSAlertFirstButtonReturn);
+                    }
+                }
                 let (nav, popup, download, permission) = security_counts.snapshot();
                 let first_ready = content_ready && chrome_ready && tabs.first().is_some_and(
                     |tab| tab.title == "Search security fixture ready"
                 );
                 // Wait for both the page report and the asynchronous WebView callbacks.
-                if first_ready && nav > 0 && download > 0 && security_reports[0]
+                if (!require_fixture_permission_sheet || fixture_permission_sheet_passed)
+                    && first_ready && nav > 0 && download > 0 && security_reports[0]
                     && !second_fixture_requested
                 {
                     second_fixture_requested = true;
@@ -1509,6 +1852,10 @@ fn main() {
                     let rect = if visible { full_window_bounds(&window) } else { bounds(&window).0 };
                     if chrome.set_bounds(rect).is_ok() {
                         composer_visible = visible;
+                        if !visible && settings_refresh_pending {
+                            settings_refresh_pending = false;
+                            refresh_settings(&mut settings, &tabs);
+                        }
                         #[cfg(target_os = "macos")]
                         shortcuts_enabled.set(chrome_ready && !visible);
                         let _ = tabs[active].view.set_visible(!visible);
@@ -1716,7 +2063,7 @@ fn main() {
                     Command::DownloadAddress { value } if preview && !private => {
                         if download_job.is_none() && !choosing_download_destination {
                             if let Some((_, url)) = preview_url(value.trim()) {
-                                use wry::WebViewExtMacOS;
+
                                 choosing_download_destination = true;
                                 let proxy = content_proxy.clone();
                                 let request_url = url.clone();
@@ -1758,28 +2105,33 @@ fn main() {
                             notice = Some("Не удалось открыть временное окно.");
                         }
                     }
-                    Command::BookmarksList | Command::BookmarkToggle | Command::BookmarkRemove { .. } if preview && !private => {
-                        let mut updated = bookmarks.clone();
-                        let changed = match command {
-                            Command::BookmarkToggle => {
-                                let current = &tabs[active];
-                                let result = preview_url(&current.display_url)
-                                    .and_then(|(_, url)| updated.toggle(&url, &current.title));
-                                if result.is_none() {
-                                    notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                    Command::BookmarksList | Command::BookmarkSet { .. } | Command::BookmarkRemove { .. } if preview && !private => {
+                        let result = bookmarks_path.as_deref().ok_or(io::ErrorKind::NotFound.into())
+                            .and_then(|path| update_bookmarks(path, |updated| match command {
+                                Command::BookmarkSet { url, saved } => {
+                                    let current = &tabs[active];
+                                    let Some((_, current_url)) = preview_url(&current.display_url)
+                                        .filter(|(_, current_url)| current_url.as_str() == url)
+                                    else {
+                                        return false;
+                                    };
+                                    if saved && !updated.contains(&current_url) {
+                                        let added = updated.add(&current_url, &current.title);
+                                        if !added {
+                                            notice = Some("Не удалось добавить закладку. Проверь адрес или число сохранённых закладок.");
+                                        }
+                                        added
+                                    } else {
+                                        !saved && updated.remove(&current_url)
+                                    }
                                 }
-                                result.is_some()
-                            }
-                            Command::BookmarkRemove { value } => preview_url(&value)
-                                .is_some_and(|(_, url)| updated.remove(&url)),
-                            _ => false,
-                        };
-                        if changed {
-                            if bookmarks_path.as_ref().is_some_and(|path| save_preference(path, &updated).is_ok()) {
-                                bookmarks = updated;
-                            } else {
-                                notice = Some("Не удалось сохранить изменения в закладках.");
-                            }
+                                Command::BookmarkRemove { value } => preview_url(&value)
+                                    .is_some_and(|(_, url)| updated.remove(&url)),
+                                _ => false,
+                            }));
+                        match result {
+                            Ok(updated) => bookmarks = updated,
+                            Err(_) => notice = Some("Не удалось прочитать или сохранить закладки."),
                         }
                         if let Ok(json) = serde_json::to_string(bookmarks.entries()) {
                             let _ = chrome.evaluate_script(&format!("window.renderBookmarks({json})"));
@@ -1810,6 +2162,11 @@ fn main() {
                                 Ok(Settings { engine, ..current })
                             }).ok());
                         if let Some(updated) = saved {
+                            if supports_page_zoom && updated.page_zoom != settings.page_zoom {
+                                for tab in &tabs {
+                                    updated.page_zoom.apply(tab);
+                                }
+                            }
                             settings = updated;
                         } else {
                             notice = Some("Не удалось сохранить поисковик.");
@@ -1838,6 +2195,7 @@ fn main() {
                                 }
                                 "conflict"
                             }
+                            Err(error) if error.kind() == io::ErrorKind::InvalidData => "invalid-file",
                             Err(_) => "failed",
                         };
                         if supports_page_zoom && settings.page_zoom != previous_zoom {
@@ -1939,6 +2297,15 @@ fn main() {
                 }
             }
             Event::WindowEvent {
+                event: WindowEvent::Focused(true),
+                ..
+            } if preview && !developer && chrome_ready => {
+                settings_refresh_pending = composer_visible;
+                if !composer_visible {
+                    refresh_settings(&mut settings, &tabs);
+                }
+            }
+            Event::WindowEvent {
                 event: WindowEvent::Resized(_),
                 ..
             } => {
@@ -1958,6 +2325,8 @@ fn main() {
                 ..
             } => *control_flow = ControlFlow::Exit,
             Event::LoopDestroyed => {
+                #[cfg(target_os = "macos")]
+                finish_fixture_permission(None);
                 #[cfg(target_os = "macos")]
                 drop(shortcut_monitor.take());
                 #[cfg(target_os = "macos")]
@@ -2043,6 +2412,28 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bookmark_updates_preserve_other_writers_and_reject_corruption() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("bookmarks.json");
+        thread::scope(|scope| {
+            for address in ["https://example.test/one", "https://example.test/two"] {
+                let path = &path;
+                scope.spawn(move || {
+                    let url = Url::parse(address).unwrap();
+                    update_bookmarks(path, |bookmarks| bookmarks.add(&url, address)).unwrap();
+                });
+            }
+        });
+        let saved = update_bookmarks(&path, |_| false).unwrap();
+        assert_eq!(saved.entries().len(), 2);
+
+        fs::write(&path, b"{").unwrap();
+        assert!(update_bookmarks(&path, |_| true).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"{");
+    }
+
     #[test]
     fn settings_migrate_the_search_engine_and_round_trip() {
         let root = env::temp_dir().join(format!("search-settings-test-{}", process::id()));
@@ -2051,6 +2442,20 @@ mod tests {
         let path = root.join("settings.json");
         save_preference(&legacy, &SearchEngine::Yandex).unwrap();
         assert_eq!(load_settings(&path, &legacy).engine, SearchEngine::Yandex);
+        fs::write(
+            &path,
+            br#"{"engine":"bing","palette":"paper","record_history":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_settings(&path, &legacy),
+            Settings {
+                engine: SearchEngine::Bing,
+                palette: Palette::Paper,
+                record_history: false,
+                ..Settings::default()
+            }
+        );
         let settings = Settings {
             engine: SearchEngine::Bing,
             private_engine: SearchEngine::DuckDuckGo,
@@ -2062,6 +2467,7 @@ mod tests {
             record_history: false,
             page_zoom: PageZoom::Large,
             download_folder: DownloadFolder::Downloads,
+            notify_download_complete: false,
         };
         fs::write(
             root.join(format!(".settings.json-{}.tmp", process::id())),
@@ -2074,7 +2480,16 @@ mod tests {
             update_settings(&path, &legacy, |_| Err(io::ErrorKind::AlreadyExists.into()));
         assert_eq!(rejected.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(load_settings(&path, &legacy), settings);
-        fs::write(&path, vec![b' '; 4097]).unwrap();
+        for unreadable in [br#"{"future_field":true}"#.to_vec(), vec![b' '; 4097]] {
+            fs::write(&path, &unreadable).unwrap();
+            assert_eq!(
+                update_settings(&path, &legacy, |_| Ok(settings))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert_eq!(fs::read(&path).unwrap(), unreadable);
+        }
         assert_eq!(load_settings(&path, &legacy).engine, SearchEngine::Yandex);
         fs::remove_dir_all(root).unwrap();
     }
