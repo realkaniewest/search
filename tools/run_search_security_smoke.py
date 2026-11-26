@@ -285,11 +285,15 @@ def run_fixtures(command, file_url, require_media_origin, require_geolocation_or
                 if (require_geolocation_origin or deferred_geolocation) and permission_results["geolocation"] != "denied":
                     print("FAIL: native geolocation denial did not reach the page", file=sys.stderr)
                     return 1
-                if deferred_media and any(
-                    permission_results[name] != "denied" for name in ("camera", "microphone")
-                ):
-                    print("FAIL: native media denial did not reach the page", file=sys.stderr)
+                if deferred_media and permission_results["microphone"] != "denied":
+                    print("FAIL: native microphone denial did not reach the page", file=sys.stderr)
                     return 1
+                if deferred_media:
+                    # Hosted macOS can reject camera constraints before consulting WebKit's delegate.
+                    camera = permission_results["camera"]
+                    if camera not in ("denied", "media-error:OverconstrainedError"):
+                        print(f"FAIL: unexpected camera result: {camera}", file=sys.stderr)
+                        return 1
                 print(f"Permission results: {permission_results}")
                 if (
                     any(
