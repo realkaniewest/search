@@ -24,7 +24,7 @@ fn main() {
     use wry::{PageLoadEvent, WebView, WebViewBuilder, WebViewBuilderExtMacos, WebViewExtMacOS};
 
     enum Message {
-        ExtensionReady(bool),
+        ReviewReady(bool),
         Ready(usize),
         Checked(usize, bool),
         UnexpectedChromeIpc,
@@ -92,11 +92,12 @@ fn main() {
     let loading_class = class(c"WKWebExtension");
     let context_class = class(c"WKWebExtensionContext");
     let completion_proxy = proxy.clone();
-    let controller_for_callback = controller.clone();
-    let extension_context = Rc::new(RefCell::new(None));
-    let context_for_callback = extension_context.clone();
-    let completion = block2::RcBlock::new(
-        move |extension: *mut AnyObject, _error: *mut NSError| {
+    let cancel_review = std::env::var_os("SEARCH_EXTENSION_CANCEL_REVIEW").is_some();
+    let reviewed_extension = Rc::new(RefCell::new(None));
+    let reviewed_for_callback = reviewed_extension.clone();
+    let extension_context = RefCell::new(None);
+    let completion =
+        block2::RcBlock::new(move |extension: *mut AnyObject, _error: *mut NSError| {
             let loaded = if extension.is_null() {
                 false
             } else {
@@ -140,23 +141,15 @@ fn main() {
                         || read_hosts(&optional_patterns) != ["https://example.test/*"]
                     {
                         eprintln!("FAIL: unexpected extension metadata for review");
-                        let _ = completion_proxy.send_event(Message::ExtensionReady(false));
+                        let _ = completion_proxy.send_event(Message::ReviewReady(false));
                         return;
                     }
-                    let allocated: Allocated<AnyObject> = msg_send![context_class, alloc];
-                    let context: Retained<AnyObject> =
-                        msg_send![allocated, initForExtension: &*extension];
-                    let mut error: *mut NSError = std::ptr::null_mut();
-                    let loaded: Bool = msg_send![&*controller_for_callback, loadExtensionContext: &*context, error: &mut error];
-                    if loaded.as_bool() {
-                        *context_for_callback.borrow_mut() = Some(context);
-                    }
-                    loaded.as_bool()
+                    *reviewed_for_callback.borrow_mut() = Retained::retain(extension);
+                    reviewed_for_callback.borrow().is_some()
                 }
             };
-            let _ = completion_proxy.send_event(Message::ExtensionReady(loaded));
-        },
-    );
+            let _ = completion_proxy.send_event(Message::ReviewReady(loaded));
+        });
     let mut start_loading = Some((resource_url, completion));
     let mut views: Vec<WebView> = Vec::new();
     let mut seen = [false; 3];
@@ -178,7 +171,35 @@ fn main() {
                     };
                 }
             }
-            Event::UserEvent(Message::ExtensionReady(true)) => {
+            Event::UserEvent(Message::ReviewReady(true)) => {
+                // In the product this branch is reached by a review decision. The
+                // smoke driver supplies that decision without a human dialog.
+                let extension = reviewed_extension.borrow_mut().take().expect("reviewed package");
+                let contexts: Retained<NSSet<AnyObject>> = unsafe { msg_send![&*controller, extensionContexts] };
+                if !contexts.is_empty() {
+                    eprintln!("FAIL: extension ran before review was confirmed");
+                    *flow = ControlFlow::ExitWithCode(1);
+                    return;
+                }
+                if cancel_review {
+                    println!("PASS: cancelling extension review left no loaded context");
+                    *flow = ControlFlow::ExitWithCode(0);
+                    return;
+                }
+                let context: Retained<AnyObject> = unsafe {
+                    let allocated: Allocated<AnyObject> = msg_send![context_class, alloc];
+                    msg_send![allocated, initForExtension: &*extension]
+                };
+                let mut error: *mut NSError = std::ptr::null_mut();
+                let loaded: Bool = unsafe {
+                    msg_send![&*controller, loadExtensionContext: &*context, error: &mut error]
+                };
+                if !loaded.as_bool() {
+                    eprintln!("FAIL: could not load the confirmed extension");
+                    *flow = ControlFlow::ExitWithCode(1);
+                    return;
+                }
+                *extension_context.borrow_mut() = Some(context);
                 for index in 0..3 {
                     let ready = proxy.clone();
                     let builder = WebViewBuilder::new().with_on_page_load_handler(move |event, _| {
@@ -319,8 +340,8 @@ fn main() {
                 eprintln!("FAIL: unexpected message reached the trusted panel handler");
                 *flow = ControlFlow::ExitWithCode(1);
             }
-            Event::UserEvent(Message::ExtensionReady(false)) => {
-                eprintln!("FAIL: WebKit could not load the extension fixture");
+            Event::UserEvent(Message::ReviewReady(false)) => {
+                eprintln!("FAIL: WebKit could not prepare the extension fixture for review");
                 *flow = ControlFlow::ExitWithCode(1);
             }
             _ => {}
