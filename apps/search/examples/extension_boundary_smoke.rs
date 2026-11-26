@@ -44,6 +44,8 @@ fn main() {
         Reenabled,
         RevokedHost,
         RevokedAlternatePort,
+        Regranted,
+        Removed,
     }
 
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -294,7 +296,7 @@ fn main() {
                     _ => address.origin().ascii_serialization(),
                 };
                 let marker = match index {
-                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled | Step::RevokedHost | Step::RevokedAlternatePort) =>
+                    0 if matches!(step, Step::Initial | Step::DeniedHost | Step::Disabled | Step::RevokedHost | Step::RevokedAlternatePort | Step::Removed) =>
                         "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc === 'undefined'",
                     0 => "document.documentElement.dataset.searchExtensionProbe === 'ran' && typeof window.ipc === 'undefined'",
                     1 => "document.documentElement.dataset.searchExtensionProbe === undefined && typeof window.ipc?.postMessage === 'function'",
@@ -371,7 +373,32 @@ fn main() {
                         &alternate_port
                     }
                     Step::RevokedAlternatePort => {
-                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable, re-enable and revoke");
+                        let context = extension_context.borrow();
+                        let context = context.as_ref().expect("loaded extension context");
+                        // Restore access to show that removal works with a running extension.
+                        unsafe {
+                            let _: () = msg_send![&**context, setPermissionStatus: 3isize, forURL: &*fixture_url];
+                        }
+                        step = Step::Regranted;
+                        &address
+                    }
+                    Step::Regranted => {
+                        let context = extension_context.borrow_mut().take().expect("installed extension");
+                        let mut error: *mut NSError = std::ptr::null_mut();
+                        let removed: Bool = unsafe {
+                            msg_send![&*controller, unloadExtensionContext: &*context, error: &mut error]
+                        };
+                        let contexts: Retained<NSSet<AnyObject>> = unsafe { msg_send![&*controller, extensionContexts] };
+                        if !removed.as_bool() || !contexts.is_empty() {
+                            eprintln!("FAIL: removing the extension left a loaded context");
+                            *flow = ControlFlow::ExitWithCode(1);
+                            return;
+                        }
+                        step = Step::Removed;
+                        &address
+                    }
+                    Step::Removed => {
+                        println!("PASS: Wry verified review metadata, default denial, chrome and profile isolation, host and port scope, disable, re-enable, revoke and remove");
                         *flow = ControlFlow::ExitWithCode(0);
                         return;
                     }
